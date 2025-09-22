@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Download, MapPin, Database, FileText, RefreshCw, ZoomIn, ZoomOut, Move, Clock } from 'lucide-react';
+import { Upload, Download, MapPin, Database, FileText, RefreshCw, ZoomIn, ZoomOut, Move, Clock, Calendar, Filter } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import './index.css'; // Make sure CSS is imported
@@ -7,6 +7,7 @@ import './index.css'; // Make sure CSS is imported
 const SensorVisualization = () => {
   const canvasRef = useRef(null);
   const [sensors, setSensors] = useState([]);
+  const [filteredSensors, setFilteredSensors] = useState([]);
   const [allRecords, setAllRecords] = useState([]); // Store all records
   const [firebaseConfig, setFirebaseConfig] = useState({
     apiKey: '',
@@ -21,24 +22,34 @@ const SensorVisualization = () => {
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [selectedSensor, setSelectedSensor] = useState(null);
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
+  
+  // Date/Time Filter States
+  const [dateRange, setDateRange] = useState({
+    startDate: '',
+    endDate: '',
+    startTime: '',
+    endTime: ''
+  });
+  const [isFilterActive, setIsFilterActive] = useState(false);
 
   // Updated sample data based on your Excel file
   const sampleData = [
-    { id: 3, datetime: '2025-09-21 18:13:21', latitude: 6.933097, longitude: 79.947125, depth: 10.8, status: 'active' },
-    { id: 4, datetime: '2025-09-21 18:17:31', latitude: 6.929419, longitude: 79.947903, depth: 21, status: 'active' },
-    { id: 5, datetime: '2025-09-21 18:24:53', latitude: 6.9295, longitude: 79.947879, depth: -14.1, status: 'active' },
-    { id: 6, datetime: '2025-09-21 18:25:02', latitude: 6.929496, longitude: 79.94789, depth: -14.1, status: 'active' },
-    // Adding multiple readings for sensor 5 to demonstrate multiple records
-    { id: 5, datetime: '2025-09-21 18:20:00', latitude: 6.9295, longitude: 79.947879, depth: -12.5, status: 'active' },
-    { id: 5, datetime: '2025-09-21 18:15:00', latitude: 6.9295, longitude: 79.947879, depth: -13.2, status: 'active' },
-    { id: 7, datetime: '2025-09-21 18:30:00', latitude: 6.9320, longitude: 79.9485, depth: 25.3, status: 'active' },
-    { id: 8, datetime: '2025-09-21 18:35:00', latitude: 6.9280, longitude: 79.9465, depth: -5.5, status: 'active' },
+    { id: 3, datetime: '9/21/2025 06:13:21', latitude: 6.933097, longitude: 79.947125, depth: 10.8, status: 'active' },
+    { id: 4, datetime: '9/21/2025 18:17:31', latitude: 6.929419, longitude: 79.947903, depth: 21, status: 'active' },
+    { id: 5, datetime: '9/21/2025 18:24:53', latitude: 6.9295, longitude: 79.947879, depth: -14.1, status: 'active' },
+    { id: 6, datetime: '9/21/2025 18:25:02', latitude: 6.929496, longitude: 79.94789, depth: -14.1, status: 'active' },
+    { id: 5, datetime: '9/21/2025 18:20:00', latitude: 6.9295, longitude: 79.947879, depth: -12.5, status: 'active' },
+    { id: 5, datetime: '9/21/2025 18:15:00', latitude: 6.9295, longitude: 79.947879, depth: -13.2, status: 'active' },
+    { id: 7, datetime: '9/22/2025 10:30:00', latitude: 6.9320, longitude: 79.9485, depth: 25.3, status: 'active' },
+    { id: 8, datetime: '9/22/2025 14:35:00', latitude: 6.9280, longitude: 79.9465, depth: -5.5, status: 'active' },
+    { id: 9, datetime: '9/23/2025 09:15:00', latitude: 6.9310, longitude: 79.9475, depth: 0.5, status: 'active' },
   ];
 
   // Convert Excel serial date to JavaScript Date
   const excelDateToJS = (serial) => {
-    if (typeof serial === 'string') return serial; // Already a string date
+    if (typeof serial === 'string') return serial;
     
+    // Handle Excel serial date
     const utc_days = Math.floor(serial - 25569);
     const utc_value = utc_days * 86400;
     const date_info = new Date(utc_value * 1000);
@@ -52,8 +63,107 @@ const SensorVisualization = () => {
     const hours = Math.floor(total_seconds / (60 * 60));
     const minutes = Math.floor(total_seconds / 60) % 60;
     
-    const jsDate = new Date(date_info.getFullYear(), date_info.getMonth(), date_info.getDate(), hours, minutes, seconds);
-    return jsDate.toISOString().replace('T', ' ').slice(0, 19);
+    // Format date as MM/DD/YYYY HH:MM:SS to match sample data format
+    const month = date_info.getMonth() + 1;
+    const day = date_info.getDate();
+    const year = date_info.getFullYear();
+    
+    return `${month}/${day}/${year} ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  // Apply date/time filter
+  const applyDateTimeFilter = () => {
+    if (!dateRange.startDate && !dateRange.endDate) {
+      setFilteredSensors(sensors);
+      setIsFilterActive(false);
+      return;
+    }
+
+    const filtered = sensors.filter(sensor => {
+      // Parse the sensor datetime more reliably
+      let sensorDateTime;
+      
+      // Handle MM/DD/YYYY format in sample data
+      if (sensor.datetime.includes('/')) {
+        const [datePart, timePart] = sensor.datetime.split(' ');
+        const [month, day, year] = datePart.split('/');
+        const timeComponents = timePart ? timePart.split(':') : ['00', '00', '00'];
+        
+        sensorDateTime = new Date(
+          parseInt(year), 
+          parseInt(month) - 1, // Month is 0-indexed in JS
+          parseInt(day),
+          parseInt(timeComponents[0]),
+          parseInt(timeComponents[1]),
+          parseInt(timeComponents[2] || 0)
+        );
+      } else {
+        // If it's already in a standard format like ISO
+        sensorDateTime = new Date(sensor.datetime);
+      }
+      
+      // Create filter boundaries
+      let startBoundary = null;
+      let endBoundary = null;
+      
+      if (dateRange.startDate) {
+        // Convert input date to JS Date
+        const [startYear, startMonth, startDay] = dateRange.startDate.split('-');
+        const [startHours, startMinutes] = dateRange.startTime ? dateRange.startTime.split(':') : ['00', '00'];
+        
+        startBoundary = new Date(
+          parseInt(startYear),
+          parseInt(startMonth) - 1,
+          parseInt(startDay),
+          parseInt(startHours),
+          parseInt(startMinutes),
+          0
+        );
+      }
+      
+      if (dateRange.endDate) {
+        // Convert input date to JS Date
+        const [endYear, endMonth, endDay] = dateRange.endDate.split('-');
+        const [endHours, endMinutes] = dateRange.endTime ? dateRange.endTime.split(':') : ['23', '59'];
+        
+        endBoundary = new Date(
+          parseInt(endYear),
+          parseInt(endMonth) - 1,
+          parseInt(endDay),
+          parseInt(endHours),
+          parseInt(endMinutes),
+          59
+        );
+      }
+      
+      // Apply filter
+      if (startBoundary && endBoundary) {
+        return sensorDateTime >= startBoundary && sensorDateTime <= endBoundary;
+      } else if (startBoundary) {
+        return sensorDateTime >= startBoundary;
+      } else if (endBoundary) {
+        return sensorDateTime <= endBoundary;
+      }
+      
+      return true;
+    });
+    
+    setFilteredSensors(filtered);
+    setIsFilterActive(true);
+    setBounds(calculateBounds(filtered.length > 0 ? filtered : sensors));
+  };
+
+  // Clear filter
+  const clearFilter = () => {
+    setDateRange({
+      startDate: '',
+      endDate: '',
+      startTime: '',
+      endTime: ''
+    });
+    setFilteredSensors(sensors);
+    setIsFilterActive(false);
+    setBounds(calculateBounds(sensors));
   };
 
   // Process sensor data to add formatted IDs
@@ -128,9 +238,11 @@ const SensorVisualization = () => {
       ctx.stroke();
     }
     
+    const sensorsToDisplay = isFilterActive ? filteredSensors : sensors;
+    
     // Group sensors by position for overlapping detection
     const positionMap = {};
-    sensors.forEach(sensor => {
+    sensorsToDisplay.forEach(sensor => {
       const pos = latLngToCanvas(sensor.latitude, sensor.longitude);
       const key = `${Math.round(pos.x)}_${Math.round(pos.y)}`;
       if (!positionMap[key]) {
@@ -142,16 +254,16 @@ const SensorVisualization = () => {
     // Draw all sensor records
     Object.values(positionMap).forEach(sensorGroup => {
       sensorGroup.forEach((sensor, index) => {
-        const offset = index * 15 * zoom; // Offset for multiple sensors at same location
+        const offset = index * 15 * zoom;
         const pos = {
           x: sensor.pos.x + offset,
           y: sensor.pos.y + offset
         };
         
-        // INVERTED depth-based color gradient (deeper is better = green)
+        // INVERTED depth-based color gradient
         const depthColor = getDepthColor(sensor.depth);
         
-        // Draw sensor icon (circle with X)
+        // Draw sensor icon
         ctx.strokeStyle = sensor.status === 'active' ? depthColor : '#999';
         ctx.fillStyle = sensor.status === 'active' ? depthColor + '33' : '#99999933';
         ctx.lineWidth = 2;
@@ -181,25 +293,31 @@ const SensorVisualization = () => {
         ctx.font = `${10 * zoom}px Arial`;
         ctx.fillText(sensor.displayId, pos.x, pos.y - 20 * zoom);
         
-        // Draw datetime if multiple records at same location
-        if (sensorGroup.length > 1) {
-          ctx.fillStyle = '#666';
-          ctx.font = `${8 * zoom}px Arial`;
-          const timeStr = sensor.datetime.split(' ')[1] || sensor.datetime;
-          ctx.fillText(timeStr, pos.x, pos.y - 35 * zoom);
-        }
+        // Multiple records indicator without showing time
+        // if (sensorGroup.length > 1) {
+        //   ctx.fillStyle = '#666';
+        //   ctx.font = `${8 * zoom}px Arial`;
+        //   ctx.fillText(`(${sensorGroup.indexOf(sensor) + 1}/${sensorGroup.length})`, pos.x, pos.y - 35 * zoom);
+        // }
       });
     });
     
     // Draw legend
     drawLegend(ctx);
+    
+    // Draw filter indicator if active
+    if (isFilterActive) {
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.9)';
+      ctx.fillRect(canvas.width - 200, 20, 180, 30);
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 12px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('FILTER ACTIVE', canvas.width - 110, 40);
+    }
   };
 
-  // INVERTED color scheme - deeper is better (green), shallower is worse (red)
+  // INVERTED color scheme
   const getDepthColor = (depth) => {
-    // Deeper water (more negative or higher positive) is GOOD = GREEN
-    // Shallower water (close to 0) is BAD = RED
-    
     const absDepth = Math.abs(depth);
     
     if (absDepth > 25) return '#00C853'; // Very deep - Bright Green
@@ -218,7 +336,7 @@ const SensorVisualization = () => {
     const legendX = 20;
     const legendY = 20;
     const legendItems = [
-      { depth: '> 25m depth', color: '#00C853' }, // Very deep - Best
+      { depth: '> 25m depth', color: '#00C853' },
       { depth: '20-25m depth', color: '#2E7D32' },
       { depth: '15-20m depth', color: '#388E3C' },
       { depth: '10-15m depth', color: '#689F38' },
@@ -226,7 +344,7 @@ const SensorVisualization = () => {
       { depth: '5-7m depth', color: '#FFB300' },
       { depth: '3-5m depth', color: '#FF6F00' },
       { depth: '1-3m depth', color: '#E65100' },
-      { depth: '< 1m depth', color: '#B71C1C' }, // Very shallow - Worst
+      { depth: '< 1m depth', color: '#B71C1C' },
     ];
     
     ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
@@ -251,12 +369,12 @@ const SensorVisualization = () => {
       ctx.fillText(item.depth, legendX + 28, y);
     });
     
-    // Add quality indicators
+    // Add quality indicators with CRITICAL instead of BAD
     ctx.font = 'bold 9px Arial';
     ctx.fillStyle = '#00C853';
     ctx.fillText('GOOD ↑', legendX + 100, legendY + 35);
     ctx.fillStyle = '#B71C1C';
-    ctx.fillText('BAD ↓', legendX + 100, legendY + legendItems.length * 16 + 15);
+    ctx.fillText('CRITICAL ↓', legendX + 85, legendY + legendItems.length * 16 + 15);
   };
 
   // Handle file import
@@ -280,15 +398,15 @@ const SensorVisualization = () => {
               id: row.sensor_id || row.id,
               datetime: row.datetime || row.date_time,
               latitude: parseFloat(row.latitude),
-              longitude: parseFloat(row.longitude || row.longtitude), // Handle typo
+              longitude: parseFloat(row.longitude || row.longtitude),
               depth: parseFloat(row.depth),
               status: row.status || 'active'
             }));
             
-            // Process and display ALL records
             const processedData = processSensorData(importedData);
             setAllRecords(processedData);
-            setSensors(processedData); // Show ALL records
+            setSensors(processedData);
+            setFilteredSensors(processedData);
             setBounds(calculateBounds(processedData));
             setLastUpdateTime(new Date());
           }
@@ -300,19 +418,26 @@ const SensorVisualization = () => {
         const worksheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json(worksheet);
         
-        importedData = jsonData.map(row => ({
-          id: row.sensor_id || row.id,
-          datetime: excelDateToJS(row.datetime || row.date_time),
-          latitude: parseFloat(row.latitude),
-          longitude: parseFloat(row.longitude || row.longtitude), // Handle typo
-          depth: parseFloat(row.depth),
-          status: row.status || 'active'
-        }));
+        importedData = jsonData.map(row => {
+          // Get datetime value - could be serial date or string
+          const rawDatetime = row.datetime || row.date_time;
+          // Process datetime based on its type
+          const processedDatetime = excelDateToJS(rawDatetime);
+          
+          return {
+            id: row.sensor_id || row.id,
+            datetime: processedDatetime,
+            latitude: parseFloat(row.latitude),
+            longitude: parseFloat(row.longitude || row.longtitude),
+            depth: parseFloat(row.depth),
+            status: row.status || 'active'
+          };
+        });
         
-        // Process and display ALL records
         const processedData = processSensorData(importedData);
         setAllRecords(processedData);
-        setSensors(processedData); // Show ALL records
+        setSensors(processedData);
+        setFilteredSensors(processedData);
         setBounds(calculateBounds(processedData));
         setLastUpdateTime(new Date());
       }
@@ -324,7 +449,6 @@ const SensorVisualization = () => {
       reader.readAsArrayBuffer(file);
     }
     
-    // Reset file input
     e.target.value = '';
   };
 
@@ -341,10 +465,12 @@ const SensorVisualization = () => {
     }, 'image/jpeg', 0.95);
   };
 
-  // Export as PDF (using browser print)
+  // Export as PDF
   const exportAsPDF = () => {
     const canvas = canvasRef.current;
     const dataUrl = canvas.toDataURL('image/png');
+    const sensorsToDisplay = isFilterActive ? filteredSensors : sensors;
+    
     const windowContent = `
       <!DOCTYPE html>
       <html>
@@ -359,31 +485,32 @@ const SensorVisualization = () => {
             th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
             th { background-color: #f2f2f2; }
             .deep { color: #00C853; font-weight: bold; }
-            .shallow { color: #B71C1C; font-weight: bold; }
-            .medium { color: #FDD835; }
+            .critical { color: #B71C1C; font-weight: bold; }
+            .medium { color: #FF6F00; }
           </style>
         </head>
         <body>
           <h1>Sensor Depth Visualization Report</h1>
           <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
-          <p><strong>Total Sensor Records:</strong> ${sensors.length}</p>
-          <p><strong>Unique Sensors:</strong> ${[...new Set(sensors.map(s => s.id))].length}</p>
+          <p><strong>Total Sensor Records:</strong> ${sensorsToDisplay.length}</p>
+          <p><strong>Unique Sensors:</strong> ${[...new Set(sensorsToDisplay.map(s => s.id))].length}</p>
+          ${isFilterActive ? `<p><strong>Filter Applied:</strong> ${dateRange.startDate || 'Start'} to ${dateRange.endDate || 'End'}</p>` : ''}
           <img src="${dataUrl}" />
           <div class="info">
-            <h3>All Sensor Records:</h3>
+            <h3>Sensor Records:</h3>
             <table>
               <tr>
                 <th>Sensor ID</th>
                 <th>Depth (m)</th>
-                <th>Quality</th>
+                <th>Status</th>
                 <th>Latitude</th>
                 <th>Longitude</th>
                 <th>Timestamp</th>
               </tr>
-              ${sensors.map(s => {
+              ${sensorsToDisplay.map(s => {
                 const absDepth = Math.abs(s.depth);
-                const qualityClass = absDepth > 15 ? 'deep' : absDepth < 5 ? 'shallow' : 'medium';
-                const quality = absDepth > 15 ? 'Good' : absDepth < 5 ? 'Poor' : 'Fair';
+                const qualityClass = absDepth > 15 ? 'deep' : absDepth < 5 ? 'critical' : 'medium';
+                const quality = absDepth > 15 ? 'Good' : absDepth < 5 ? 'Critical' : 'Fair';
                 return `
                   <tr>
                     <td>${s.displayId}</td>
@@ -411,7 +538,8 @@ const SensorVisualization = () => {
   const loadSampleData = () => {
     const processedData = processSensorData(sampleData);
     setAllRecords(processedData);
-    setSensors(processedData); // Show ALL records
+    setSensors(processedData);
+    setFilteredSensors(processedData);
     setBounds(calculateBounds(processedData));
     setLastUpdateTime(new Date());
   };
@@ -444,18 +572,19 @@ const SensorVisualization = () => {
 
   // Firebase connection simulation
   const connectToFirebase = () => {
-    // This would connect to actual Firebase
     setIsConnected(true);
     console.log('Firebase connection would be established here');
   };
 
   useEffect(() => {
     drawCanvas();
-  }, [sensors, zoom, pan, bounds]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredSensors, sensors, zoom, pan, bounds, isFilterActive]);
 
   // Group sensors by ID for the list
   const getSensorSummary = () => {
-    const grouped = sensors.reduce((acc, sensor) => {
+    const sensorsToDisplay = isFilterActive ? filteredSensors : sensors;
+    const grouped = sensorsToDisplay.reduce((acc, sensor) => {
       const id = sensor.id;
       if (!acc[id]) {
         acc[id] = {
@@ -475,7 +604,6 @@ const SensorVisualization = () => {
       return acc;
     }, {});
     
-    // Calculate averages
     Object.values(grouped).forEach(summary => {
       const sum = summary.records.reduce((s, r) => s + r.depth, 0);
       summary.avgDepth = (sum / summary.records.length).toFixed(1);
@@ -486,7 +614,7 @@ const SensorVisualization = () => {
 
   const sensorSummaries = getSensorSummary();
 
-  // Inline styles for critical UI elements (backup for Tailwind)
+  // Inline styles
   const styles = {
     container: {
       minHeight: '100vh',
@@ -524,6 +652,12 @@ const SensorVisualization = () => {
       border: '1px solid #d1d5db',
       cursor: isDragging ? 'grabbing' : 'grab',
       backgroundColor: 'white'
+    },
+    input: {
+      padding: '6px 10px',
+      borderRadius: '4px',
+      border: '1px solid #d1d5db',
+      fontSize: '14px'
     }
   };
 
@@ -533,6 +667,96 @@ const SensorVisualization = () => {
         <h1 style={{ fontSize: '28px', fontWeight: 'bold', marginBottom: '24px', color: '#1f2937' }}>
           Sensor Depth Visualization System
         </h1>
+        
+        {/* Date/Time Filter Panel */}
+        <div style={{ ...styles.card, backgroundColor: '#f8fafc', borderLeft: '4px solid #3B82F6' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+            <Calendar size={20} color="#3B82F6" />
+            <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Date & Time Filter</h3>
+          </div>
+          
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+            <div>
+              <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
+                Start Date
+              </label>
+              <input
+                type="date"
+                value={dateRange.startDate}
+                onChange={(e) => setDateRange({...dateRange, startDate: e.target.value})}
+                style={styles.input}
+              />
+            </div>
+            
+            <div>
+              <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
+                Start Time
+              </label>
+              <input
+                type="time"
+                value={dateRange.startTime}
+                onChange={(e) => setDateRange({...dateRange, startTime: e.target.value})}
+                style={styles.input}
+              />
+            </div>
+            
+            <div>
+              <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
+                End Date
+              </label>
+              <input
+                type="date"
+                value={dateRange.endDate}
+                onChange={(e) => setDateRange({...dateRange, endDate: e.target.value})}
+                style={styles.input}
+              />
+            </div>
+            
+            <div>
+              <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
+                End Time
+              </label>
+              <input
+                type="time"
+                value={dateRange.endTime}
+                onChange={(e) => setDateRange({...dateRange, endTime: e.target.value})}
+                style={styles.input}
+              />
+            </div>
+            
+            <div style={{ display: 'flex', gap: '8px', marginLeft: 'auto' }}>
+              <button
+                onClick={applyDateTimeFilter}
+                style={{ ...styles.button, ...styles.primaryButton }}
+              >
+                <Filter size={16} />
+                Apply Filter
+              </button>
+              
+              <button
+                onClick={clearFilter}
+                style={{ ...styles.button, backgroundColor: '#6b7280', color: 'white' }}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          
+          {isFilterActive && (
+            <div style={{ 
+              marginTop: '12px', 
+              padding: '8px 12px', 
+              backgroundColor: '#3B82F6', 
+              color: 'white',
+              borderRadius: '4px',
+              fontSize: '14px'
+            }}>
+              <strong>Filter Active:</strong> Showing {filteredSensors.length} of {sensors.length} records
+              {dateRange.startDate && ` from ${dateRange.startDate}`}
+              {dateRange.endDate && ` to ${dateRange.endDate}`}
+            </div>
+          )}
+        </div>
         
         {/* Control Panel */}
         <div style={styles.card}>
@@ -645,7 +869,7 @@ const SensorVisualization = () => {
                   Sensor Summary
                 </h3>
                 <p style={{ fontSize: '12px', color: '#6b7280' }}>
-                  {sensorSummaries.length} unique sensors | {sensors.length} total records
+                  {sensorSummaries.length} unique sensors | {isFilterActive ? filteredSensors.length : sensors.length} records
                 </p>
               </div>
               
@@ -658,8 +882,18 @@ const SensorVisualization = () => {
               }}>
                 {sensorSummaries.map((summary) => {
                   const avgDepth = parseFloat(summary.avgDepth);
-                  const depthQuality = Math.abs(avgDepth) > 15 ? 'Good' : Math.abs(avgDepth) < 5 ? 'Poor' : 'Fair';
-                  const qualityColor = Math.abs(avgDepth) > 15 ? '#00C853' : Math.abs(avgDepth) < 5 ? '#B71C1C' : '#FDD835';
+                  const depthQuality = Math.abs(avgDepth) > 15 ? 'Good' : Math.abs(avgDepth) < 5 ? 'Critical' : 'Fair';
+                  
+                  // IMPROVED COLORS FOR BETTER READABILITY
+                  const qualityColor = 
+                    Math.abs(avgDepth) > 15 ? '#00C853' : 
+                    Math.abs(avgDepth) < 5 ? '#B71C1C' : 
+                    '#FF6F00'; // Changed from yellow to dark orange for better readability
+                  
+                  const bgColor = 
+                    Math.abs(avgDepth) > 15 ? 'rgba(0, 200, 83, 0.1)' :
+                    Math.abs(avgDepth) < 5 ? 'rgba(183, 28, 28, 0.1)' :
+                    'rgba(255, 111, 0, 0.1)'; // Light orange background
                   
                   return (
                     <div
@@ -669,7 +903,7 @@ const SensorVisualization = () => {
                         marginBottom: '8px',
                         backgroundColor: '#f9fafb',
                         borderRadius: '6px',
-                        border: '1px solid #e5e7eb',
+                        border: `2px solid ${qualityColor}33`,
                         cursor: 'pointer'
                       }}
                       onClick={() => setSelectedSensor(summary)}
@@ -677,12 +911,13 @@ const SensorVisualization = () => {
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontWeight: '600', fontSize: '16px' }}>{summary.id}</span>
                         <span style={{ 
-                          padding: '2px 8px',
-                          fontSize: '10px',
+                          padding: '4px 8px',
+                          fontSize: '11px',
                           borderRadius: '4px',
-                          backgroundColor: qualityColor + '33',
+                          backgroundColor: bgColor,
                           color: qualityColor,
-                          fontWeight: 'bold'
+                          fontWeight: 'bold',
+                          border: `1px solid ${qualityColor}`
                         }}>
                           {depthQuality}
                         </span>
@@ -690,7 +925,12 @@ const SensorVisualization = () => {
                       <div style={{ fontSize: '12px', color: '#4b5563', marginTop: '8px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                           <span>Avg Depth:</span>
-                          <span style={{ fontWeight: '600', color: qualityColor }}>
+                          <span style={{ 
+                            fontWeight: '600', 
+                            color: qualityColor,
+                            textShadow: Math.abs(avgDepth) > 5 && Math.abs(avgDepth) <= 10 ? 
+                              '0 0 3px rgba(255,255,255,0.8)' : 'none'
+                          }}>
                             {summary.avgDepth}m
                           </span>
                         </div>
@@ -704,7 +944,7 @@ const SensorVisualization = () => {
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                           <span>Location:</span>
-                          <span>{summary.latitude.toFixed(4)}, {summary.longitude.toFixed(4)}</span>
+                          <span style={{ fontSize: '11px' }}>{summary.latitude.toFixed(4)}, {summary.longitude.toFixed(4)}</span>
                         </div>
                       </div>
                     </div>
@@ -720,10 +960,16 @@ const SensorVisualization = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#6b7280' }}>
             <span>Zoom: {(zoom * 100).toFixed(0)}%</span>
             <span>
-              Records: {sensors.length} | Sensors: {sensorSummaries.length}
+              {isFilterActive ? 'Filtered: ' : ''}
+              {isFilterActive ? filteredSensors.length : sensors.length} records | 
+              {sensorSummaries.length} sensors
             </span>
             <span>
-              Depth range: {Math.min(...sensors.map(s => s.depth)).toFixed(1)}m to {Math.max(...sensors.map(s => s.depth)).toFixed(1)}m
+              Depth range: {
+                (isFilterActive ? filteredSensors : sensors).length > 0 ?
+                `${Math.min(...(isFilterActive ? filteredSensors : sensors).map(s => s.depth)).toFixed(1)}m to ${Math.max(...(isFilterActive ? filteredSensors : sensors).map(s => s.depth)).toFixed(1)}m`
+                : 'No data'
+              }
             </span>
           </div>
         </div>
