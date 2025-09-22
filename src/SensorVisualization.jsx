@@ -219,7 +219,7 @@ const SensorVisualization = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     // Background
-    ctx.fillStyle = '#f0f4f8';
+    ctx.fillStyle = '#9cc4ebff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
     // Draw grid
