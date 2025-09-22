@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Upload, Download, MapPin, Database, FileText, RefreshCw, ZoomIn, ZoomOut, Move, Clock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
+import './index.css'; // Make sure CSS is imported
 
 const SensorVisualization = () => {
   const canvasRef = useRef(null);
@@ -23,13 +24,15 @@ const SensorVisualization = () => {
 
   // Updated sample data based on your Excel file
   const sampleData = [
-    //{ id: 3, datetime: '2025-09-21 18:13:21', latitude: 6.933097, longitude: 79.947125, depth: 10.8, status: 'active' },
+    { id: 3, datetime: '2025-09-21 18:13:21', latitude: 6.933097, longitude: 79.947125, depth: 10.8, status: 'active' },
     { id: 4, datetime: '2025-09-21 18:17:31', latitude: 6.929419, longitude: 79.947903, depth: 21, status: 'active' },
     { id: 5, datetime: '2025-09-21 18:24:53', latitude: 6.9295, longitude: 79.947879, depth: -14.1, status: 'active' },
     { id: 6, datetime: '2025-09-21 18:25:02', latitude: 6.929496, longitude: 79.94789, depth: -14.1, status: 'active' },
-    // Adding multiple readings for sensor 5 to demonstrate filtering
+    // Adding multiple readings for sensor 5 to demonstrate multiple records
     { id: 5, datetime: '2025-09-21 18:20:00', latitude: 6.9295, longitude: 79.947879, depth: -12.5, status: 'active' },
     { id: 5, datetime: '2025-09-21 18:15:00', latitude: 6.9295, longitude: 79.947879, depth: -13.2, status: 'active' },
+    { id: 7, datetime: '2025-09-21 18:30:00', latitude: 6.9320, longitude: 79.9485, depth: 25.3, status: 'active' },
+    { id: 8, datetime: '2025-09-21 18:35:00', latitude: 6.9280, longitude: 79.9465, depth: -5.5, status: 'active' },
   ];
 
   // Convert Excel serial date to JavaScript Date
@@ -53,36 +56,12 @@ const SensorVisualization = () => {
     return jsDate.toISOString().replace('T', ' ').slice(0, 19);
   };
 
-  // Process sensor data to get only the latest reading per sensor
-  const processLatestReadings = (sensorData) => {
-    // Group sensors by ID
-    const grouped = sensorData.reduce((acc, sensor) => {
-      const id = sensor.id;
-      if (!acc[id]) {
-        acc[id] = [];
-      }
-      acc[id].push(sensor);
-      return acc;
-    }, {});
-
-    // Get the latest reading for each sensor
-    const latestReadings = Object.entries(grouped).map(([id, records]) => {
-      // Sort by datetime descending and take the first (latest)
-      const sorted = records.sort((a, b) => {
-        const dateA = new Date(a.datetime);
-        const dateB = new Date(b.datetime);
-        return dateB - dateA;
-      });
-      
-      const latest = sorted[0];
-      return {
-        ...latest,
-        id: typeof latest.id === 'number' ? `S00${latest.id}` : latest.id,
-        recordCount: records.length // Add count of records for this sensor
-      };
-    });
-
-    return latestReadings;
+  // Process sensor data to add formatted IDs
+  const processSensorData = (sensorData) => {
+    return sensorData.map(sensor => ({
+      ...sensor,
+      displayId: typeof sensor.id === 'number' ? `S00${sensor.id}` : sensor.id
+    }));
   };
 
   // Calculate bounds from sensor data
@@ -92,8 +71,8 @@ const SensorVisualization = () => {
     const lats = sensorData.map(s => s.latitude);
     const lngs = sensorData.map(s => s.longitude);
     
-    const latPadding = (Math.max(...lats) - Math.min(...lats)) * 0.1;
-    const lngPadding = (Math.max(...lngs) - Math.min(...lngs)) * 0.1;
+    const latPadding = (Math.max(...lats) - Math.min(...lats)) * 0.1 || 0.001;
+    const lngPadding = (Math.max(...lngs) - Math.min(...lngs)) * 0.1 || 0.001;
     
     return {
       minLat: Math.min(...lats) - latPadding,
@@ -149,98 +128,112 @@ const SensorVisualization = () => {
       ctx.stroke();
     }
     
-    // Draw sensors
+    // Group sensors by position for overlapping detection
+    const positionMap = {};
     sensors.forEach(sensor => {
       const pos = latLngToCanvas(sensor.latitude, sensor.longitude);
-      
-      // Depth-based color gradient
-      const depthColor = getDepthColor(sensor.depth);
-      
-      // Draw sensor icon (circle with X)
-      ctx.strokeStyle = sensor.status === 'active' ? depthColor : '#999';
-      ctx.fillStyle = sensor.status === 'active' ? depthColor + '33' : '#99999933';
-      ctx.lineWidth = 2;
-      
-      // Circle
-      ctx.beginPath();
-      ctx.arc(pos.x, pos.y, 7 * zoom, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.stroke();
-      
-      // X mark
-      const size = 8 * zoom;
-      ctx.beginPath();
-      ctx.moveTo(pos.x - size, pos.y - size);
-      ctx.lineTo(pos.x + size, pos.y + size);
-      ctx.moveTo(pos.x + size, pos.y - size);
-      ctx.lineTo(pos.x - size, pos.y + size);
-      ctx.stroke();
-      
-      // Draw depth label
-      ctx.fillStyle = '#333';
-      ctx.font = `bold ${12 * zoom}px Arial`;
-      ctx.textAlign = 'center';
-      ctx.fillText(`${sensor.depth}m`, pos.x, pos.y + 30 * zoom);
-      
-      // Draw sensor ID
-      ctx.font = `${10 * zoom}px Arial`;
-      ctx.fillText(sensor.id, pos.x, pos.y - 20 * zoom);
-      
-      // Draw record count if multiple records exist
-      if (sensor.recordCount > 1) {
-        ctx.fillStyle = '#666';
-        ctx.font = `${9 * zoom}px Arial`;
-        ctx.fillText(`(${sensor.recordCount} records)`, pos.x, pos.y - 35 * zoom);
+      const key = `${Math.round(pos.x)}_${Math.round(pos.y)}`;
+      if (!positionMap[key]) {
+        positionMap[key] = [];
       }
+      positionMap[key].push({ ...sensor, pos });
+    });
+    
+    // Draw all sensor records
+    Object.values(positionMap).forEach(sensorGroup => {
+      sensorGroup.forEach((sensor, index) => {
+        const offset = index * 15 * zoom; // Offset for multiple sensors at same location
+        const pos = {
+          x: sensor.pos.x + offset,
+          y: sensor.pos.y + offset
+        };
+        
+        // INVERTED depth-based color gradient (deeper is better = green)
+        const depthColor = getDepthColor(sensor.depth);
+        
+        // Draw sensor icon (circle with X)
+        ctx.strokeStyle = sensor.status === 'active' ? depthColor : '#999';
+        ctx.fillStyle = sensor.status === 'active' ? depthColor + '33' : '#99999933';
+        ctx.lineWidth = 2;
+        
+        // Circle
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 8 * zoom, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+        
+        // X mark
+        const size = 6 * zoom;
+        ctx.beginPath();
+        ctx.moveTo(pos.x - size, pos.y - size);
+        ctx.lineTo(pos.x + size, pos.y + size);
+        ctx.moveTo(pos.x + size, pos.y - size);
+        ctx.lineTo(pos.x - size, pos.y + size);
+        ctx.stroke();
+        
+        // Draw depth label
+        ctx.fillStyle = '#333';
+        ctx.font = `bold ${12 * zoom}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.fillText(`${sensor.depth}m`, pos.x, pos.y + 25 * zoom);
+        
+        // Draw sensor ID
+        ctx.font = `${10 * zoom}px Arial`;
+        ctx.fillText(sensor.displayId, pos.x, pos.y - 20 * zoom);
+        
+        // Draw datetime if multiple records at same location
+        if (sensorGroup.length > 1) {
+          ctx.fillStyle = '#666';
+          ctx.font = `${8 * zoom}px Arial`;
+          const timeStr = sensor.datetime.split(' ')[1] || sensor.datetime;
+          ctx.fillText(timeStr, pos.x, pos.y - 35 * zoom);
+        }
+      });
     });
     
     // Draw legend
     drawLegend(ctx);
   };
 
-  // Get color based on depth
+  // INVERTED color scheme - deeper is better (green), shallower is worse (red)
   const getDepthColor = (depth) => {
-    // Handle negative depths (below sea level)
-    if (depth < 0) {
-      const absDepth = Math.abs(depth);
-      if (absDepth < 5) return '#00BCD4';
-      if (absDepth < 10) return '#0097A7';
-      if (absDepth < 15) return '#00796B';
-      if (absDepth < 20) return '#004D40';
-      return '#1A237E';
-    }
-    // Positive depths
-    if (depth < 5) return '#4CAF50';
-    if (depth < 10) return '#8BC34A';
-    if (depth < 15) return '#FFC107';
-    if (depth < 20) return '#FF9800';
-    if (depth < 25) return '#FF5722';
-    return '#F44336';
+    // Deeper water (more negative or higher positive) is GOOD = GREEN
+    // Shallower water (close to 0) is BAD = RED
+    
+    const absDepth = Math.abs(depth);
+    
+    if (absDepth > 25) return '#00C853'; // Very deep - Bright Green
+    if (absDepth > 20) return '#2E7D32'; // Deep - Dark Green
+    if (absDepth > 15) return '#388E3C'; // Moderately deep - Green
+    if (absDepth > 10) return '#689F38'; // Medium deep - Light Green
+    if (absDepth > 7) return '#FDD835'; // Medium - Yellow
+    if (absDepth > 5) return '#FFB300'; // Getting shallow - Orange
+    if (absDepth > 3) return '#FF6F00'; // Shallow - Dark Orange
+    if (absDepth > 1) return '#E65100'; // Very shallow - Red-Orange
+    return '#B71C1C'; // Extremely shallow - Dark Red
   };
 
-  // Draw legend
+  // Draw legend with INVERTED color scheme
   const drawLegend = (ctx) => {
     const legendX = 20;
     const legendY = 20;
     const legendItems = [
-      { depth: '< -20m', color: '#1A237E' },
-      { depth: '-20 to -15m', color: '#004D40' },
-      { depth: '-15 to -10m', color: '#00796B' },
-      { depth: '-10 to -5m', color: '#0097A7' },
-      { depth: '-5 to 0m', color: '#00BCD4' },
-      { depth: '0-5m', color: '#4CAF50' },
-      { depth: '5-10m', color: '#8BC34A' },
-      { depth: '10-15m', color: '#FFC107' },
-      { depth: '15-20m', color: '#FF9800' },
-      { depth: '20-25m', color: '#FF5722' },
-      { depth: '> 25m', color: '#F44336' }
+      { depth: '> 25m depth', color: '#00C853' }, // Very deep - Best
+      { depth: '20-25m depth', color: '#2E7D32' },
+      { depth: '15-20m depth', color: '#388E3C' },
+      { depth: '10-15m depth', color: '#689F38' },
+      { depth: '7-10m depth', color: '#FDD835' },
+      { depth: '5-7m depth', color: '#FFB300' },
+      { depth: '3-5m depth', color: '#FF6F00' },
+      { depth: '1-3m depth', color: '#E65100' },
+      { depth: '< 1m depth', color: '#B71C1C' }, // Very shallow - Worst
     ];
     
     ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-    ctx.fillRect(legendX, legendY, 140, legendItems.length * 10 + 10);
+    ctx.fillRect(legendX, legendY, 150, legendItems.length * 18 + 30);
     
     ctx.strokeStyle = '#ccc';
-    ctx.strokeRect(legendX, legendY, 140, legendItems.length * 20 + 20);
+    ctx.strokeRect(legendX, legendY, 150, legendItems.length * 18 + 30);
     
     ctx.fillStyle = '#333';
     ctx.font = 'bold 11px Arial';
@@ -249,7 +242,7 @@ const SensorVisualization = () => {
     
     ctx.font = '10px Arial';
     legendItems.forEach((item, index) => {
-      const y = legendY + 30 + index * 18;
+      const y = legendY + 30 + index * 16;
       
       ctx.fillStyle = item.color;
       ctx.fillRect(legendX + 10, y - 8, 12, 12);
@@ -257,6 +250,13 @@ const SensorVisualization = () => {
       ctx.fillStyle = '#333';
       ctx.fillText(item.depth, legendX + 28, y);
     });
+    
+    // Add quality indicators
+    ctx.font = 'bold 9px Arial';
+    ctx.fillStyle = '#00C853';
+    ctx.fillText('GOOD ↑', legendX + 100, legendY + 35);
+    ctx.fillStyle = '#B71C1C';
+    ctx.fillText('BAD ↓', legendX + 100, legendY + legendItems.length * 16 + 15);
   };
 
   // Handle file import
@@ -284,6 +284,13 @@ const SensorVisualization = () => {
               depth: parseFloat(row.depth),
               status: row.status || 'active'
             }));
+            
+            // Process and display ALL records
+            const processedData = processSensorData(importedData);
+            setAllRecords(processedData);
+            setSensors(processedData); // Show ALL records
+            setBounds(calculateBounds(processedData));
+            setLastUpdateTime(new Date());
           }
         });
       } else if (fileExt === 'xlsx') {
@@ -301,16 +308,14 @@ const SensorVisualization = () => {
           depth: parseFloat(row.depth),
           status: row.status || 'active'
         }));
+        
+        // Process and display ALL records
+        const processedData = processSensorData(importedData);
+        setAllRecords(processedData);
+        setSensors(processedData); // Show ALL records
+        setBounds(calculateBounds(processedData));
+        setLastUpdateTime(new Date());
       }
-      
-      // Store all records for reference
-      setAllRecords(importedData);
-      
-      // Process to get only latest readings
-      const latestReadings = processLatestReadings(importedData);
-      setSensors(latestReadings);
-      setBounds(calculateBounds(latestReadings));
-      setLastUpdateTime(new Date());
     };
     
     if (fileExt === 'csv') {
@@ -353,37 +358,43 @@ const SensorVisualization = () => {
             table { border-collapse: collapse; width: 100%; margin-top: 20px; }
             th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
             th { background-color: #f2f2f2; }
-            .negative { color: #0097A7; }
-            .positive { color: #FF9800; }
+            .deep { color: #00C853; font-weight: bold; }
+            .shallow { color: #B71C1C; font-weight: bold; }
+            .medium { color: #FDD835; }
           </style>
         </head>
         <body>
           <h1>Sensor Depth Visualization Report</h1>
           <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
-          <p><strong>Total Active Sensors:</strong> ${sensors.length}</p>
-          <p><strong>Total Records Processed:</strong> ${allRecords.length}</p>
+          <p><strong>Total Sensor Records:</strong> ${sensors.length}</p>
+          <p><strong>Unique Sensors:</strong> ${[...new Set(sensors.map(s => s.id))].length}</p>
           <img src="${dataUrl}" />
           <div class="info">
-            <h3>Sensor Summary (Latest Readings):</h3>
+            <h3>All Sensor Records:</h3>
             <table>
               <tr>
                 <th>Sensor ID</th>
                 <th>Depth (m)</th>
+                <th>Quality</th>
                 <th>Latitude</th>
                 <th>Longitude</th>
-                <th>Last Update</th>
-                <th>Records</th>
+                <th>Timestamp</th>
               </tr>
-              ${sensors.map(s => `
-                <tr>
-                  <td>${s.id}</td>
-                  <td class="${s.depth < 0 ? 'negative' : 'positive'}">${s.depth}</td>
-                  <td>${s.latitude.toFixed(6)}</td>
-                  <td>${s.longitude.toFixed(6)}</td>
-                  <td>${s.datetime}</td>
-                  <td>${s.recordCount || 1}</td>
-                </tr>
-              `).join('')}
+              ${sensors.map(s => {
+                const absDepth = Math.abs(s.depth);
+                const qualityClass = absDepth > 15 ? 'deep' : absDepth < 5 ? 'shallow' : 'medium';
+                const quality = absDepth > 15 ? 'Good' : absDepth < 5 ? 'Poor' : 'Fair';
+                return `
+                  <tr>
+                    <td>${s.displayId}</td>
+                    <td class="${qualityClass}">${s.depth}</td>
+                    <td class="${qualityClass}">${quality}</td>
+                    <td>${s.latitude.toFixed(6)}</td>
+                    <td>${s.longitude.toFixed(6)}</td>
+                    <td>${s.datetime}</td>
+                  </tr>
+                `;
+              }).join('')}
             </table>
           </div>
         </body>
@@ -398,10 +409,10 @@ const SensorVisualization = () => {
 
   // Load sample data
   const loadSampleData = () => {
-    setAllRecords(sampleData);
-    const latestReadings = processLatestReadings(sampleData);
-    setSensors(latestReadings);
-    setBounds(calculateBounds(latestReadings));
+    const processedData = processSensorData(sampleData);
+    setAllRecords(processedData);
+    setSensors(processedData); // Show ALL records
+    setBounds(calculateBounds(processedData));
     setLastUpdateTime(new Date());
   };
 
@@ -436,55 +447,113 @@ const SensorVisualization = () => {
     // This would connect to actual Firebase
     setIsConnected(true);
     console.log('Firebase connection would be established here');
-    
-    // Simulate real-time updates
-    if (!isConnected) {
-      const interval = setInterval(() => {
-        // In production, this would be real Firebase data
-        const mockUpdate = sensors.map(sensor => ({
-          ...sensor,
-          depth: sensor.depth + (Math.random() - 0.5) * 0.5, // Small random variation
-          datetime: new Date().toISOString().replace('T', ' ').slice(0, 19)
-        }));
-        setSensors(mockUpdate);
-        setLastUpdateTime(new Date());
-      }, 5000); // Update every 5 seconds
-      
-      return () => clearInterval(interval);
-    }
   };
 
   useEffect(() => {
     drawCanvas();
   }, [sensors, zoom, pan, bounds]);
 
+  // Group sensors by ID for the list
+  const getSensorSummary = () => {
+    const grouped = sensors.reduce((acc, sensor) => {
+      const id = sensor.id;
+      if (!acc[id]) {
+        acc[id] = {
+          id: sensor.displayId,
+          records: [],
+          minDepth: sensor.depth,
+          maxDepth: sensor.depth,
+          avgDepth: 0,
+          latitude: sensor.latitude,
+          longitude: sensor.longitude,
+          status: sensor.status
+        };
+      }
+      acc[id].records.push(sensor);
+      acc[id].minDepth = Math.min(acc[id].minDepth, sensor.depth);
+      acc[id].maxDepth = Math.max(acc[id].maxDepth, sensor.depth);
+      return acc;
+    }, {});
+    
+    // Calculate averages
+    Object.values(grouped).forEach(summary => {
+      const sum = summary.records.reduce((s, r) => s + r.depth, 0);
+      summary.avgDepth = (sum / summary.records.length).toFixed(1);
+    });
+    
+    return Object.values(grouped);
+  };
+
+  const sensorSummaries = getSensorSummary();
+
+  // Inline styles for critical UI elements (backup for Tailwind)
+  const styles = {
+    container: {
+      minHeight: '100vh',
+      backgroundColor: '#f3f4f6',
+      padding: '16px'
+    },
+    card: {
+      backgroundColor: 'white',
+      borderRadius: '8px',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+      padding: '16px',
+      marginBottom: '16px'
+    },
+    button: {
+      padding: '8px 16px',
+      borderRadius: '6px',
+      border: 'none',
+      cursor: 'pointer',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '8px',
+      fontSize: '14px',
+      fontWeight: '500',
+      transition: 'all 0.2s'
+    },
+    primaryButton: {
+      backgroundColor: '#3B82F6',
+      color: 'white'
+    },
+    successButton: {
+      backgroundColor: '#10B981',
+      color: 'white'
+    },
+    canvas: {
+      border: '1px solid #d1d5db',
+      cursor: isDragging ? 'grabbing' : 'grab',
+      backgroundColor: 'white'
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gray-100">
-      <div className="container mx-auto p-4">
-        <h1 className="text-3xl font-bold mb-6 text-gray-800">Sensor Depth Visualization System</h1>
+    <div style={styles.container}>
+      <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+        <h1 style={{ fontSize: '28px', fontWeight: 'bold', marginBottom: '24px', color: '#1f2937' }}>
+          Sensor Depth Visualization System
+        </h1>
         
         {/* Control Panel */}
-        <div className="bg-white rounded-lg shadow-md p-4 mb-4">
-          <div className="flex flex-wrap gap-4 items-center">
+        <div style={styles.card}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
             
             {/* File Import */}
-            <div className="flex items-center gap-2">
-              <label className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded cursor-pointer hover:bg-blue-600 transition-colors">
-                <Upload size={20} />
-                Import Data
-                <input 
-                  type="file" 
-                  accept=".csv,.xlsx" 
-                  onChange={handleFileImport}
-                  className="hidden"
-                />
-              </label>
-            </div>
+            <label style={{ ...styles.button, ...styles.primaryButton }}>
+              <Upload size={20} />
+              Import Data
+              <input 
+                type="file" 
+                accept=".csv,.xlsx" 
+                onChange={handleFileImport}
+                style={{ display: 'none' }}
+              />
+            </label>
             
             {/* Sample Data */}
             <button
               onClick={loadSampleData}
-              className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
+              style={{ ...styles.button, ...styles.successButton }}
             >
               <FileText size={20} />
               Load Sample
@@ -493,9 +562,11 @@ const SensorVisualization = () => {
             {/* Firebase Connection */}
             <button
               onClick={connectToFirebase}
-              className={`flex items-center gap-2 px-4 py-2 rounded transition-colors ${
-                isConnected ? 'bg-green-500 text-white' : 'bg-gray-500 text-white hover:bg-gray-600'
-              }`}
+              style={{ 
+                ...styles.button, 
+                backgroundColor: isConnected ? '#10B981' : '#6b7280',
+                color: 'white'
+              }}
             >
               <Database size={20} />
               {isConnected ? 'Connected' : 'Connect Firebase'}
@@ -504,7 +575,7 @@ const SensorVisualization = () => {
             {/* Export Options */}
             <button
               onClick={exportAsJPEG}
-              className="flex items-center gap-2 px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 transition-colors"
+              style={{ ...styles.button, backgroundColor: '#8B5CF6', color: 'white' }}
             >
               <Download size={20} />
               Export JPEG
@@ -512,31 +583,31 @@ const SensorVisualization = () => {
             
             <button
               onClick={exportAsPDF}
-              className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
+              style={{ ...styles.button, backgroundColor: '#EF4444', color: 'white' }}
             >
               <Download size={20} />
               Export PDF
             </button>
             
             {/* Zoom Controls */}
-            <div className="flex items-center gap-2 ml-auto">
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
               <button
                 onClick={handleZoomIn}
-                className="p-2 bg-gray-200 rounded hover:bg-gray-300 transition-colors"
+                style={{ ...styles.button, backgroundColor: '#e5e7eb' }}
                 title="Zoom In"
               >
                 <ZoomIn size={20} />
               </button>
               <button
                 onClick={handleZoomOut}
-                className="p-2 bg-gray-200 rounded hover:bg-gray-300 transition-colors"
+                style={{ ...styles.button, backgroundColor: '#e5e7eb' }}
                 title="Zoom Out"
               >
                 <ZoomOut size={20} />
               </button>
               <button
                 onClick={handleResetView}
-                className="p-2 bg-gray-200 rounded hover:bg-gray-300 transition-colors"
+                style={{ ...styles.button, backgroundColor: '#e5e7eb' }}
                 title="Reset View"
               >
                 <RefreshCw size={20} />
@@ -545,95 +616,111 @@ const SensorVisualization = () => {
           </div>
         </div>
         
-        {/* Main Visualization Canvas */}
-        <div className="bg-white rounded-lg shadow-md p-4">
-          <div className="flex gap-4">
-            <div className="flex-1">
+        {/* Main Visualization */}
+        <div style={styles.card}>
+          <div style={{ display: 'flex', gap: '16px' }}>
+            <div style={{ flex: 1 }}>
               <canvas
                 ref={canvasRef}
                 width={1000}
-                height={800}
-                className="border border-gray-300 cursor-move"
+                height={600}
+                style={styles.canvas}
                 onMouseDown={handleCanvasMouseDown}
                 onMouseMove={handleCanvasMouseMove}
                 onMouseUp={handleCanvasMouseUp}
                 onMouseLeave={handleCanvasMouseUp}
               />
               {lastUpdateTime && (
-                <div className="mt-2 text-sm text-gray-600 flex items-center gap-2">
+                <div style={{ marginTop: '8px', fontSize: '12px', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Clock size={14} />
                   Last updated: {lastUpdateTime.toLocaleTimeString()}
                 </div>
               )}
             </div>
             
-            {/* Sensor List */}
-            <div className="w-80">
-              <div className="mb-4">
-                <h3 className="text-lg font-semibold mb-2">
-                  Active Sensors ({sensors.length})
+            {/* Sensor Summary List */}
+            <div style={{ width: '320px' }}>
+              <div style={{ marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '8px' }}>
+                  Sensor Summary
                 </h3>
-                {allRecords.length > 0 && (
-                  <p className="text-sm text-gray-600">
-                    Total records: {allRecords.length}
-                  </p>
-                )}
+                <p style={{ fontSize: '12px', color: '#6b7280' }}>
+                  {sensorSummaries.length} unique sensors | {sensors.length} total records
+                </p>
               </div>
-              <div className="max-h-96 overflow-y-auto border border-gray-200 rounded p-2">
-                {sensors.map((sensor) => (
-                  <div
-                    key={sensor.id}
-                    className={`p-3 mb-2 rounded cursor-pointer transition-colors hover:bg-gray-100 ${
-                      selectedSensor?.id === sensor.id ? 'bg-blue-100 border-blue-300 border' : 'bg-gray-50'
-                    }`}
-                    onClick={() => setSelectedSensor(sensor)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-lg">{sensor.id}</span>
-                      <span className={`px-2 py-1 text-xs rounded ${
-                        sensor.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-gray-200'
-                      }`}>
-                        {sensor.status}
-                      </span>
-                    </div>
-                    <div className="text-sm text-gray-600 mt-2 space-y-1">
-                      <div className="flex justify-between">
-                        <span>Depth:</span>
-                        <span className={`font-medium ${sensor.depth < 0 ? 'text-blue-600' : 'text-orange-600'}`}>
-                          {sensor.depth}m
+              
+              <div style={{ 
+                maxHeight: '500px', 
+                overflowY: 'auto', 
+                border: '1px solid #e5e7eb',
+                borderRadius: '6px',
+                padding: '8px'
+              }}>
+                {sensorSummaries.map((summary) => {
+                  const avgDepth = parseFloat(summary.avgDepth);
+                  const depthQuality = Math.abs(avgDepth) > 15 ? 'Good' : Math.abs(avgDepth) < 5 ? 'Poor' : 'Fair';
+                  const qualityColor = Math.abs(avgDepth) > 15 ? '#00C853' : Math.abs(avgDepth) < 5 ? '#B71C1C' : '#FDD835';
+                  
+                  return (
+                    <div
+                      key={summary.id}
+                      style={{
+                        padding: '12px',
+                        marginBottom: '8px',
+                        backgroundColor: '#f9fafb',
+                        borderRadius: '6px',
+                        border: '1px solid #e5e7eb',
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => setSelectedSensor(summary)}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontWeight: '600', fontSize: '16px' }}>{summary.id}</span>
+                        <span style={{ 
+                          padding: '2px 8px',
+                          fontSize: '10px',
+                          borderRadius: '4px',
+                          backgroundColor: qualityColor + '33',
+                          color: qualityColor,
+                          fontWeight: 'bold'
+                        }}>
+                          {depthQuality}
                         </span>
                       </div>
-                      <div className="flex justify-between">
-                        <span>Lat:</span>
-                        <span>{sensor.latitude.toFixed(6)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Lng:</span>
-                        <span>{sensor.longitude.toFixed(6)}</span>
-                      </div>
-                      {sensor.recordCount > 1 && (
-                        <div className="flex justify-between text-xs text-gray-500">
-                          <span>Records:</span>
-                          <span>{sensor.recordCount}</span>
+                      <div style={{ fontSize: '12px', color: '#4b5563', marginTop: '8px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                          <span>Avg Depth:</span>
+                          <span style={{ fontWeight: '600', color: qualityColor }}>
+                            {summary.avgDepth}m
+                          </span>
                         </div>
-                      )}
-                      <div className="text-xs text-gray-500 mt-1">
-                        {sensor.datetime}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                          <span>Range:</span>
+                          <span>{summary.minDepth}m to {summary.maxDepth}m</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                          <span>Records:</span>
+                          <span style={{ fontWeight: '600' }}>{summary.records.length}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>Location:</span>
+                          <span>{summary.latitude.toFixed(4)}, {summary.longitude.toFixed(4)}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
         </div>
         
         {/* Status Bar */}
-        <div className="mt-4 bg-white rounded-lg shadow-md p-4">
-          <div className="flex justify-between text-sm text-gray-600">
+        <div style={styles.card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#6b7280' }}>
             <span>Zoom: {(zoom * 100).toFixed(0)}%</span>
             <span>
-              Sensors: {sensors.filter(s => s.status === 'active').length} active / {sensors.length} total
+              Records: {sensors.length} | Sensors: {sensorSummaries.length}
             </span>
             <span>
               Depth range: {Math.min(...sensors.map(s => s.depth)).toFixed(1)}m to {Math.max(...sensors.map(s => s.depth)).toFixed(1)}m
