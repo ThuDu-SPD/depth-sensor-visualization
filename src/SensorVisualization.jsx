@@ -514,7 +514,7 @@ const SensorVisualization = () => {
                 return `
                   <tr>
                     <td>${s.displayId}</td>
-                    <td class="${qualityClass}">${s.depth}</td>
+                    <td class="${qualityClass}">${s.depth.toFixed(3)}</td>
                     <td class="${qualityClass}">${quality}</td>
                     <td>${s.latitude.toFixed(6)}</td>
                     <td>${s.longitude.toFixed(6)}</td>
@@ -574,7 +574,7 @@ const SensorVisualization = () => {
     
     // Calculate zoom factor based on wheel direction
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-    const newZoom = Math.min(Math.max(zoom * zoomFactor, 0.5), 3); // Constrain between 0.5x and 3x
+    const newZoom = Math.min(Math.max(zoom * zoomFactor, 0.5), 10); // Constrain between 0.5x and 10x
     
     // Calculate mouse position in canvas space before zoom
     const mouseXBeforeZoom = (mouseX - pan.x) / zoom;
@@ -596,7 +596,7 @@ const SensorVisualization = () => {
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
     
-    const newZoom = Math.min(zoom * 1.2, 3);
+    const newZoom = Math.min(zoom * 1.2, 10);
     
     // Calculate center point in canvas space before zoom
     const centerXBeforeZoom = (centerX - pan.x) / zoom;
@@ -706,7 +706,7 @@ const SensorVisualization = () => {
     
     Object.values(grouped).forEach(summary => {
       const sum = summary.records.reduce((s, r) => s + r.depth, 0);
-      summary.avgDepth = (sum / summary.records.length).toFixed(1);
+      summary.avgDepth = (sum / summary.records.length).toFixed(3);
     });
     
     return Object.values(grouped);
@@ -1049,7 +1049,7 @@ const SensorVisualization = () => {
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                           <span>Range:</span>
-                          <span>{summary.minDepth}m to {summary.maxDepth}m</span>
+                          <span>{summary.minDepth.toFixed(3)}m to {summary.maxDepth.toFixed(3)}m</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                           <span>Records:</span>
@@ -1080,7 +1080,7 @@ const SensorVisualization = () => {
             <span>
               Depth range: {
                 (isFilterActive ? filteredSensors : sensors).length > 0 ?
-                `${Math.min(...(isFilterActive ? filteredSensors : sensors).map(s => s.depth)).toFixed(1)}m to ${Math.max(...(isFilterActive ? filteredSensors : sensors).map(s => s.depth)).toFixed(1)}m`
+                `${Math.min(...(isFilterActive ? filteredSensors : sensors).map(s => s.depth)).toFixed(3)}m to ${Math.max(...(isFilterActive ? filteredSensors : sensors).map(s => s.depth)).toFixed(3)}m`
                 : 'No data'
               }
             </span>
