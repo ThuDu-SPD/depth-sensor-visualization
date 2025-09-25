@@ -562,9 +562,75 @@ const SensorVisualization = () => {
   const handleCanvasMouseUp = () => {
     setIsDragging(false);
   };
+  
+  // Handle zoom with mouse wheel - zoom in/out centered on mouse position
+  const handleMouseWheel = (e) => {
+    e.preventDefault();
+    
+    // Get mouse position relative to canvas
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    // Calculate zoom factor based on wheel direction
+    const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+    const newZoom = Math.min(Math.max(zoom * zoomFactor, 0.5), 3); // Constrain between 0.5x and 3x
+    
+    // Calculate mouse position in canvas space before zoom
+    const mouseXBeforeZoom = (mouseX - pan.x) / zoom;
+    const mouseYBeforeZoom = (mouseY - pan.y) / zoom;
+    
+    // Calculate new pan position to keep the mouse point fixed
+    const newPanX = mouseX - mouseXBeforeZoom * newZoom;
+    const newPanY = mouseY - mouseYBeforeZoom * newZoom;
+    
+    // Update state
+    setZoom(newZoom);
+    setPan({ x: newPanX, y: newPanY });
+  };
 
-  const handleZoomIn = () => setZoom(prev => Math.min(prev * 1.2, 3));
-  const handleZoomOut = () => setZoom(prev => Math.max(prev / 1.2, 0.5));
+  const handleZoomIn = () => {
+    if (!canvasRef.current) return;
+    
+    const canvas = canvasRef.current;
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    
+    const newZoom = Math.min(zoom * 1.2, 3);
+    
+    // Calculate center point in canvas space before zoom
+    const centerXBeforeZoom = (centerX - pan.x) / zoom;
+    const centerYBeforeZoom = (centerY - pan.y) / zoom;
+    
+    // Calculate new pan position to keep the center point fixed
+    const newPanX = centerX - centerXBeforeZoom * newZoom;
+    const newPanY = centerY - centerYBeforeZoom * newZoom;
+    
+    setZoom(newZoom);
+    setPan({ x: newPanX, y: newPanY });
+  };
+  
+  const handleZoomOut = () => {
+    if (!canvasRef.current) return;
+    
+    const canvas = canvasRef.current;
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    
+    const newZoom = Math.max(zoom / 1.2, 0.5);
+    
+    // Calculate center point in canvas space before zoom
+    const centerXBeforeZoom = (centerX - pan.x) / zoom;
+    const centerYBeforeZoom = (centerY - pan.y) / zoom;
+    
+    // Calculate new pan position to keep the center point fixed
+    const newPanX = centerX - centerXBeforeZoom * newZoom;
+    const newPanY = centerY - centerYBeforeZoom * newZoom;
+    
+    setZoom(newZoom);
+    setPan({ x: newPanX, y: newPanY });
+  };
+  
   const handleResetView = () => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
@@ -589,18 +655,26 @@ const SensorVisualization = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
-    const pos = latLngToCanvas(sensor.latitude, sensor.longitude);
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
     
-    // Calculate the pan offset needed to center the sensor
-    const newPan = {
-      x: centerX - (pos.x / zoom),
-      y: centerY - (pos.y / zoom)
+    // Target zoom level
+    const newZoom = 1.5;
+    
+    // Convert sensor coordinates to canvas coordinates at current zoom
+    const sensorPos = {
+      x: ((sensor.longitude - bounds.minLng) / (bounds.maxLng - bounds.minLng)) * (canvas.width - 100) + 50,
+      y: canvas.height - (((sensor.latitude - bounds.minLat) / (bounds.maxLat - bounds.minLat)) * (canvas.height - 100) + 50)
     };
     
-    // Adjust zoom level to focus on this sensor (slightly zoomed in)
-    setZoom(1.5);
+    // Calculate the pan needed to center the sensor at the new zoom level
+    const newPan = {
+      x: centerX - sensorPos.x * newZoom,
+      y: centerY - sensorPos.y * newZoom
+    };
+    
+    // Update zoom and pan
+    setZoom(newZoom);
     setPan(newPan);
     
     // Update selected sensor
@@ -891,6 +965,7 @@ const SensorVisualization = () => {
                 onMouseMove={handleCanvasMouseMove}
                 onMouseUp={handleCanvasMouseUp}
                 onMouseLeave={handleCanvasMouseUp}
+                onWheel={handleMouseWheel}
               />
               {lastUpdateTime && (
                 <div style={{ marginTop: '8px', fontSize: '12px', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '8px' }}>
