@@ -268,14 +268,14 @@ const SensorVisualization = () => {
         ctx.fillStyle = sensor.status === 'active' ? depthColor + '33' : '#99999933';
         ctx.lineWidth = 2;
         
-        // Circle
+        // Circle - fixed size regardless of zoom
         ctx.beginPath();
-        ctx.arc(pos.x, pos.y, 8 * zoom, 0, 2 * Math.PI);
+        ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
         ctx.fill();
         ctx.stroke();
         
-        // X mark
-        const size = 6 * zoom;
+        // X mark - fixed size regardless of zoom
+        const size = 6;
         ctx.beginPath();
         ctx.moveTo(pos.x - size, pos.y - size);
         ctx.lineTo(pos.x + size, pos.y + size);
@@ -285,13 +285,13 @@ const SensorVisualization = () => {
         
         // Draw depth label
         ctx.fillStyle = '#333';
-        ctx.font = `bold ${12 * zoom}px Arial`;
+        ctx.font = `bold ${12}px Arial`; // Fixed size regardless of zoom
         ctx.textAlign = 'center';
-        ctx.fillText(`${sensor.depth}m`, pos.x, pos.y + 25 * zoom);
+        ctx.fillText(`${sensor.depth.toFixed(3)}m`, pos.x, pos.y + 25);
         
         // Draw sensor ID
-        ctx.font = `${10 * zoom}px Arial`;
-        ctx.fillText(sensor.displayId, pos.x, pos.y - 20 * zoom);
+        ctx.font = `10px Arial`; // Fixed size regardless of zoom
+        ctx.fillText(sensor.displayId, pos.x, pos.y - 20);
         
         // Multiple records indicator without showing time
         // if (sensorGroup.length > 1) {
@@ -581,6 +581,32 @@ const SensorVisualization = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredSensors, sensors, zoom, pan, bounds, isFilterActive]);
 
+  // Focus on selected sensor
+  const focusOnSensor = (sensor) => {
+    if (!sensor || !bounds) return;
+    
+    // Center the view on this sensor
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const pos = latLngToCanvas(sensor.latitude, sensor.longitude);
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    
+    // Calculate the pan offset needed to center the sensor
+    const newPan = {
+      x: centerX - (pos.x / zoom),
+      y: centerY - (pos.y / zoom)
+    };
+    
+    // Adjust zoom level to focus on this sensor (slightly zoomed in)
+    setZoom(1.5);
+    setPan(newPan);
+    
+    // Update selected sensor
+    setSelectedSensor(sensor);
+  };
+
   // Group sensors by ID for the list
   const getSensorSummary = () => {
     const sensorsToDisplay = isFilterActive ? filteredSensors : sensors;
@@ -830,6 +856,18 @@ const SensorVisualization = () => {
                 <ZoomOut size={20} />
               </button>
               <button
+                onClick={() => selectedSensor ? focusOnSensor(selectedSensor) : handleResetView()}
+                style={{ 
+                  ...styles.button, 
+                  backgroundColor: selectedSensor ? '#3B82F6' : '#e5e7eb',
+                  color: selectedSensor ? 'white' : 'inherit'
+                }}
+                title={selectedSensor ? "Focus on Selected Sensor" : "Reset View"}
+              >
+                <MapPin size={18} />
+                {selectedSensor ? ' Focus View' : ' Reset View'}
+              </button>
+              <button
                 onClick={handleResetView}
                 style={{ ...styles.button, backgroundColor: '#e5e7eb' }}
                 title="Reset View"
@@ -906,7 +944,7 @@ const SensorVisualization = () => {
                         border: `2px solid ${qualityColor}33`,
                         cursor: 'pointer'
                       }}
-                      onClick={() => setSelectedSensor(summary)}
+                      onClick={() => focusOnSensor(summary)}
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontWeight: '600', fontSize: '16px' }}>{summary.id}</span>
