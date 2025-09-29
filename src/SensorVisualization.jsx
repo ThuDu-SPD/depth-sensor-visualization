@@ -1,8 +1,18 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Upload, Download, MapPin, Database, FileText, RefreshCw, ZoomIn, ZoomOut, Move, Clock, Calendar, Filter } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
+import { GoogleMap, useJsApiLoader, Marker, InfoWindow } from '@react-google-maps/api';
 import './index.css'; // Make sure CSS is imported
+
+// Google Maps API key
+const GOOGLE_MAPS_API_KEY = 'AIzaSyCE6XWyEXwpMYE0ZVfshb-9X3CKXcNpJcA';
+
+// Load Google Maps API
+const mapContainerStyle = {
+  width: '100%',
+  height: '600px',
+};
 
 const SensorVisualization = () => {
   const canvasRef = useRef(null);
@@ -21,7 +31,16 @@ const SensorVisualization = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [selectedSensor, setSelectedSensor] = useState(null);
+  const [selectedMarker, setSelectedMarker] = useState(null);
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
+  const [mapInstance, setMapInstance] = useState(null);
+  const [useGoogleMap, setUseGoogleMap] = useState(true);
+  
+  // Google Maps API loader
+  const { isLoaded } = useJsApiLoader({
+    id: 'google-map-script',
+    googleMapsApiKey: GOOGLE_MAPS_API_KEY
+  });
   
   // Date/Time Filter States
   const [dateRange, setDateRange] = useState({
@@ -191,6 +210,29 @@ const SensorVisualization = () => {
       maxLng: Math.max(...lngs) + lngPadding
     };
   };
+  
+  // Get map center from bounds
+  const mapCenter = useMemo(() => {
+    if (!bounds) return { lat: 6.9300, lng: 79.9470 }; // Default center near sample data
+    
+    return {
+      lat: (bounds.minLat + bounds.maxLat) / 2,
+      lng: (bounds.minLng + bounds.maxLng) / 2
+    };
+  }, [bounds]);
+  
+  // Handle map load
+  const onMapLoad = useCallback((map) => {
+    setMapInstance(map);
+    
+    if (bounds) {
+      const mapBounds = new window.google.maps.LatLngBounds(
+        { lat: bounds.minLat, lng: bounds.minLng },
+        { lat: bounds.maxLat, lng: bounds.maxLat }
+      );
+      map.fitBounds(mapBounds);
+    }
+  }, [bounds]);
 
   // Convert lat/lng to canvas coordinates
   const latLngToCanvas = (lat, lng) => {
@@ -643,9 +685,11 @@ const SensorVisualization = () => {
   };
 
   useEffect(() => {
-    drawCanvas();
+    if (!useGoogleMap) {
+      drawCanvas();
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredSensors, sensors, zoom, pan, bounds, isFilterActive]);
+  }, [filteredSensors, sensors, zoom, pan, bounds, isFilterActive, useGoogleMap]);
 
   // Focus on selected sensor
   const focusOnSensor = (sensor) => {
@@ -915,10 +959,26 @@ const SensorVisualization = () => {
             
             {/* Zoom Controls */}
             <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+              {/* Map Toggle Button */}
+              <button
+                onClick={() => setUseGoogleMap(!useGoogleMap)}
+                style={{ 
+                  ...styles.button, 
+                  backgroundColor: useGoogleMap ? '#3B82F6' : '#e5e7eb',
+                  color: useGoogleMap ? 'white' : 'inherit',
+                  fontWeight: 'bold'
+                }}
+                title={useGoogleMap ? "Switch to Canvas View" : "Switch to Google Maps View"}
+              >
+                <MapPin size={18} />
+                {useGoogleMap ? ' Google Maps' : ' Canvas View'}
+              </button>
+              
               <button
                 onClick={handleZoomIn}
                 style={{ ...styles.button, backgroundColor: '#e5e7eb' }}
                 title="Zoom In"
+                disabled={useGoogleMap}
               >
                 <ZoomIn size={20} />
               </button>
@@ -926,6 +986,7 @@ const SensorVisualization = () => {
                 onClick={handleZoomOut}
                 style={{ ...styles.button, backgroundColor: '#e5e7eb' }}
                 title="Zoom Out"
+                disabled={useGoogleMap}
               >
                 <ZoomOut size={20} />
               </button>
@@ -937,6 +998,7 @@ const SensorVisualization = () => {
                   color: selectedSensor ? 'white' : 'inherit'
                 }}
                 title={selectedSensor ? "Focus on Selected Sensor" : "Reset View"}
+                disabled={useGoogleMap}
               >
                 <MapPin size={18} />
                 {selectedSensor ? ' Focus View' : ' Reset View'}
@@ -945,6 +1007,7 @@ const SensorVisualization = () => {
                 onClick={handleResetView}
                 style={{ ...styles.button, backgroundColor: '#e5e7eb' }}
                 title="Reset View"
+                disabled={useGoogleMap}
               >
                 <RefreshCw size={20} />
               </button>
@@ -956,17 +1019,123 @@ const SensorVisualization = () => {
         <div style={styles.card}>
           <div style={{ display: 'flex', gap: '16px' }}>
             <div style={{ flex: 1 }}>
-              <canvas
-                ref={canvasRef}
-                width={1000}
-                height={600}
-                style={styles.canvas}
-                onMouseDown={handleCanvasMouseDown}
-                onMouseMove={handleCanvasMouseMove}
-                onMouseUp={handleCanvasMouseUp}
-                onMouseLeave={handleCanvasMouseUp}
-                onWheel={handleMouseWheel}
-              />
+              {useGoogleMap && isLoaded ? (
+                <GoogleMap
+                  mapContainerStyle={mapContainerStyle}
+                  center={mapCenter}
+                  zoom={14}
+                  onLoad={onMapLoad}
+                >
+                  {/* Display sensors as markers */}
+                  {(isFilterActive ? filteredSensors : sensors).map((sensor, index) => {
+                    const depthColor = getDepthColor(sensor.depth);
+                    
+                    // Circle marker for better visibility
+                    const circleMarker = {
+                      path: window.google.maps.SymbolPath.CIRCLE,
+                      fillColor: depthColor,
+                      fillOpacity: 0.4,
+                      strokeWeight: 2,
+                      strokeColor: depthColor,
+                      scale: 8,
+                    };
+                    
+                    return (
+                      <Marker
+                        key={`${sensor.id}-${sensor.datetime}-${index}`}
+                        position={{ lat: sensor.latitude, lng: sensor.longitude }}
+                        icon={circleMarker}
+                        title={`${sensor.displayId}: ${sensor.depth.toFixed(3)}m`}
+                        onClick={() => {
+                          setSelectedMarker(sensor);
+                          setSelectedSensor(sensor);
+                        }}
+                        label={{
+                          text: sensor.depth.toFixed(1),
+                          color: '#FFFFFF',
+                          fontSize: '10px',
+                          fontWeight: 'bold'
+                        }}
+                      />
+                    );
+                  })}
+                  
+                  {/* Display InfoWindow for selected marker */}
+                  {selectedMarker && (
+                    <InfoWindow
+                      position={{ lat: selectedMarker.latitude, lng: selectedMarker.longitude }}
+                      onCloseClick={() => setSelectedMarker(null)}
+                    >
+                      <div style={{ padding: '5px' }}>
+                        <h3 style={{ fontSize: '14px', fontWeight: '600', margin: '0 0 5px 0' }}>
+                          {selectedMarker.displayId}
+                        </h3>
+                        <p style={{ margin: '3px 0', fontSize: '12px' }}>
+                          <strong>Depth:</strong> {selectedMarker.depth.toFixed(3)}m
+                        </p>
+                        <p style={{ margin: '3px 0', fontSize: '12px' }}>
+                          <strong>Date:</strong> {selectedMarker.datetime}
+                        </p>
+                        <p style={{ margin: '3px 0', fontSize: '12px' }}>
+                          <strong>Location:</strong> {selectedMarker.latitude.toFixed(6)}, {selectedMarker.longitude.toFixed(6)}
+                        </p>
+                      </div>
+                    </InfoWindow>
+                  )}
+                  
+                  {/* Google Maps Legend */}
+                  <div style={{
+                    position: 'absolute',
+                    top: '10px',
+                    left: '10px',
+                    backgroundColor: 'white',
+                    padding: '10px',
+                    borderRadius: '5px',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                    zIndex: '1000'
+                  }}>
+                    <h4 style={{ margin: '0 0 8px 0', fontSize: '12px', fontWeight: 'bold' }}>Depth Legend</h4>
+                    {[
+                      { depth: '> 25m depth', color: '#00C853' },
+                      { depth: '20-25m depth', color: '#2E7D32' },
+                      { depth: '15-20m depth', color: '#388E3C' },
+                      { depth: '10-15m depth', color: '#689F38' },
+                      { depth: '7-10m depth', color: '#FDD835' },
+                      { depth: '5-7m depth', color: '#FFB300' },
+                      { depth: '3-5m depth', color: '#FF6F00' },
+                      { depth: '1-3m depth', color: '#E65100' },
+                      { depth: '< 1m depth', color: '#B71C1C' },
+                    ].map((item, index) => (
+                      <div key={index} style={{ display: 'flex', alignItems: 'center', marginBottom: '3px' }}>
+                        <div style={{ 
+                          width: '12px', 
+                          height: '12px', 
+                          backgroundColor: item.color, 
+                          marginRight: '6px',
+                          border: '1px solid rgba(0,0,0,0.2)'
+                        }}></div>
+                        <span style={{ fontSize: '10px' }}>{item.depth}</span>
+                      </div>
+                    ))}
+                    <div style={{ marginTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '9px', fontWeight: 'bold', color: '#00C853' }}>GOOD ↑</span>
+                      <span style={{ fontSize: '9px', fontWeight: 'bold', color: '#B71C1C' }}>CRITICAL ↓</span>
+                    </div>
+                  </div>
+                </GoogleMap>
+              ) : (
+                <canvas
+                  ref={canvasRef}
+                  width={1000}
+                  height={600}
+                  style={styles.canvas}
+                  onMouseDown={handleCanvasMouseDown}
+                  onMouseMove={handleCanvasMouseMove}
+                  onMouseUp={handleCanvasMouseUp}
+                  onMouseLeave={handleCanvasMouseUp}
+                  onWheel={handleMouseWheel}
+                />
+              )}
               {lastUpdateTime && (
                 <div style={{ marginTop: '8px', fontSize: '12px', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Clock size={14} />
@@ -1071,7 +1240,9 @@ const SensorVisualization = () => {
         {/* Status Bar */}
         <div style={styles.card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#6b7280' }}>
-            <span>Zoom: {(zoom * 100).toFixed(0)}%</span>
+            <span>
+              {useGoogleMap ? 'Google Maps View' : `Canvas View (Zoom: ${(zoom * 100).toFixed(0)}%)`}
+            </span>
             <span>
               {isFilterActive ? 'Filtered: ' : ''}
               {isFilterActive ? filteredSensors.length : sensors.length} records | 
