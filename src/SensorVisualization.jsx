@@ -12,6 +12,8 @@ const GOOGLE_MAPS_API_KEY = 'AIzaSyCE6XWyEXwpMYE0ZVfshb-9X3CKXcNpJcA';
 const mapContainerStyle = {
   width: '100%',
   height: '600px',
+  borderRadius: '8px',
+  border: '1px solid #d1d5db',
 };
 
 const SensorVisualization = () => {
@@ -211,7 +213,7 @@ const SensorVisualization = () => {
     };
   };
   
-  // Get map center from bounds
+  // Get map center and initial map options
   const mapCenter = useMemo(() => {
     if (!bounds) return { lat: 6.9300, lng: 79.9470 }; // Default center near sample data
     
@@ -221,16 +223,37 @@ const SensorVisualization = () => {
     };
   }, [bounds]);
   
+  // Default map zoom level - use higher value for better visibility
+  const initialMapZoom = useMemo(() => {
+    // If we have a small number of points that are close to each other, use a higher zoom
+    if (sensors.length > 0 && sensors.length < 5) return 18;
+    // If we have a moderate number of points, use a medium zoom
+    if (sensors.length >= 5 && sensors.length < 20) return 16;
+    // For larger datasets, start with a standard zoom
+    return 15;
+  }, [sensors.length]);
+  
   // Handle map load
   const onMapLoad = useCallback((map) => {
     setMapInstance(map);
     
     if (bounds) {
+      // Create proper bounds with correct coordinates
       const mapBounds = new window.google.maps.LatLngBounds(
         { lat: bounds.minLat, lng: bounds.minLng },
-        { lat: bounds.maxLat, lng: bounds.maxLat }
+        { lat: bounds.maxLat, lng: bounds.maxLng }
       );
-      map.fitBounds(mapBounds);
+      
+      // Fit the map to the bounds with padding to ensure sensors are visible
+      map.fitBounds(mapBounds, { padding: 50 });
+      
+      // Apply a slightly higher zoom level for better visibility
+      setTimeout(() => {
+        const currentZoom = map.getZoom();
+        if (currentZoom < 16) {
+          map.setZoom(currentZoom + 1);
+        }
+      }, 100);
     }
   }, [bounds]);
 
@@ -693,35 +716,44 @@ const SensorVisualization = () => {
 
   // Focus on selected sensor
   const focusOnSensor = (sensor) => {
-    if (!sensor || !bounds) return;
+    if (!sensor) return;
     
-    // Center the view on this sensor
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (useGoogleMap && mapInstance) {
+      // For Google Maps view: center and zoom to the selected sensor
+      mapInstance.setCenter({ lat: sensor.latitude, lng: sensor.longitude });
+      mapInstance.setZoom(18); // Set a high zoom level to focus on the sensor
+      
+      // Set the selected marker to show the info window
+      setSelectedMarker(sensor);
+    } else if (bounds) {
+      // For Canvas view: original implementation
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+      
+      // Target zoom level
+      const newZoom = 1.5;
+      
+      // Convert sensor coordinates to canvas coordinates at current zoom
+      const sensorPos = {
+        x: ((sensor.longitude - bounds.minLng) / (bounds.maxLng - bounds.minLng)) * (canvas.width - 100) + 50,
+        y: canvas.height - (((sensor.latitude - bounds.minLat) / (bounds.maxLat - bounds.minLat)) * (canvas.height - 100) + 50)
+      };
+      
+      // Calculate the pan needed to center the sensor at the new zoom level
+      const newPan = {
+        x: centerX - sensorPos.x * newZoom,
+        y: centerY - sensorPos.y * newZoom
+      };
+      
+      // Update zoom and pan
+      setZoom(newZoom);
+      setPan(newPan);
+    }
     
-    const centerX = canvas.width / 2;
-    const centerY = canvas.height / 2;
-    
-    // Target zoom level
-    const newZoom = 1.5;
-    
-    // Convert sensor coordinates to canvas coordinates at current zoom
-    const sensorPos = {
-      x: ((sensor.longitude - bounds.minLng) / (bounds.maxLng - bounds.minLng)) * (canvas.width - 100) + 50,
-      y: canvas.height - (((sensor.latitude - bounds.minLat) / (bounds.maxLat - bounds.minLat)) * (canvas.height - 100) + 50)
-    };
-    
-    // Calculate the pan needed to center the sensor at the new zoom level
-    const newPan = {
-      x: centerX - sensorPos.x * newZoom,
-      y: centerY - sensorPos.y * newZoom
-    };
-    
-    // Update zoom and pan
-    setZoom(newZoom);
-    setPan(newPan);
-    
-    // Update selected sensor
+    // Update selected sensor in both views
     setSelectedSensor(sensor);
   };
 
@@ -975,18 +1007,26 @@ const SensorVisualization = () => {
               </button>
               
               <button
-                onClick={handleZoomIn}
-                style={{ ...styles.button, backgroundColor: '#e5e7eb' }}
+                onClick={useGoogleMap ? () => mapInstance?.setZoom((mapInstance?.getZoom() || 15) + 1) : handleZoomIn}
+                style={{ 
+                  ...styles.button, 
+                  backgroundColor: '#e5e7eb',
+                  opacity: mapInstance || !useGoogleMap ? 1 : 0.5
+                }}
                 title="Zoom In"
-                disabled={useGoogleMap}
+                disabled={useGoogleMap && !mapInstance}
               >
                 <ZoomIn size={20} />
               </button>
               <button
-                onClick={handleZoomOut}
-                style={{ ...styles.button, backgroundColor: '#e5e7eb' }}
+                onClick={useGoogleMap ? () => mapInstance?.setZoom((mapInstance?.getZoom() || 15) - 1) : handleZoomOut}
+                style={{ 
+                  ...styles.button, 
+                  backgroundColor: '#e5e7eb',
+                  opacity: mapInstance || !useGoogleMap ? 1 : 0.5
+                }}
                 title="Zoom Out"
-                disabled={useGoogleMap}
+                disabled={useGoogleMap && !mapInstance}
               >
                 <ZoomOut size={20} />
               </button>
@@ -998,16 +1038,25 @@ const SensorVisualization = () => {
                   color: selectedSensor ? 'white' : 'inherit'
                 }}
                 title={selectedSensor ? "Focus on Selected Sensor" : "Reset View"}
-                disabled={useGoogleMap}
               >
                 <MapPin size={18} />
                 {selectedSensor ? ' Focus View' : ' Reset View'}
               </button>
               <button
-                onClick={handleResetView}
+                onClick={useGoogleMap && mapInstance ? 
+                  () => {
+                    // Reset the Google Map to fit all sensors
+                    if (bounds && mapInstance) {
+                      const mapBounds = new window.google.maps.LatLngBounds(
+                        { lat: bounds.minLat, lng: bounds.minLng },
+                        { lat: bounds.maxLat, lng: bounds.maxLng }
+                      );
+                      mapInstance.fitBounds(mapBounds, { padding: 50 });
+                    }
+                  } : 
+                  handleResetView}
                 style={{ ...styles.button, backgroundColor: '#e5e7eb' }}
                 title="Reset View"
-                disabled={useGoogleMap}
               >
                 <RefreshCw size={20} />
               </button>
@@ -1023,21 +1072,32 @@ const SensorVisualization = () => {
                 <GoogleMap
                   mapContainerStyle={mapContainerStyle}
                   center={mapCenter}
-                  zoom={14}
+                  zoom={initialMapZoom}
                   onLoad={onMapLoad}
+                  options={{
+                    zoomControl: true,
+                    streetViewControl: false,
+                    mapTypeControl: true,
+                    fullscreenControl: true,
+                    gestureHandling: 'greedy', // Makes the map easier to zoom with mouse wheel
+                    mapTypeControlOptions: {
+                      mapTypeIds: ['roadmap', 'satellite', 'hybrid']
+                    }
+                  }}
                 >
                   {/* Display sensors as markers */}
                   {(isFilterActive ? filteredSensors : sensors).map((sensor, index) => {
                     const depthColor = getDepthColor(sensor.depth);
                     
-                    // Circle marker for better visibility
+                    // Circle marker with enhanced visibility and size
                     const circleMarker = {
                       path: window.google.maps.SymbolPath.CIRCLE,
                       fillColor: depthColor,
-                      fillOpacity: 0.4,
+                      fillOpacity: 0.7,
                       strokeWeight: 2,
-                      strokeColor: depthColor,
-                      scale: 8,
+                      strokeColor: '#FFFFFF',
+                      strokeOpacity: 0.9,
+                      scale: 12,
                     };
                     
                     return (
@@ -1082,6 +1142,60 @@ const SensorVisualization = () => {
                       </div>
                     </InfoWindow>
                   )}
+                  
+                  {/* Custom Zoom Controls for Google Maps */}
+                  <div style={{
+                    position: 'absolute',
+                    right: '10px',
+                    top: '100px',
+                    backgroundColor: 'white',
+                    padding: '5px',
+                    borderRadius: '5px',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                    zIndex: '1000',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '5px'
+                  }}>
+                    <button
+                      onClick={() => mapInstance?.setZoom((mapInstance.getZoom() || 14) + 1)}
+                      style={{
+                        width: '30px',
+                        height: '30px',
+                        border: '1px solid #ccc',
+                        borderRadius: '3px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: 'white',
+                        cursor: 'pointer',
+                        fontSize: '18px',
+                        fontWeight: 'bold'
+                      }}
+                      title="Zoom In"
+                    >
+                      +
+                    </button>
+                    <button
+                      onClick={() => mapInstance?.setZoom((mapInstance.getZoom() || 14) - 1)}
+                      style={{
+                        width: '30px',
+                        height: '30px',
+                        border: '1px solid #ccc',
+                        borderRadius: '3px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: 'white',
+                        cursor: 'pointer',
+                        fontSize: '18px',
+                        fontWeight: 'bold'
+                      }}
+                      title="Zoom Out"
+                    >
+                      −
+                    </button>
+                  </div>
                   
                   {/* Google Maps Legend */}
                   <div style={{
