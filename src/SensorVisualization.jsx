@@ -519,84 +519,170 @@ const SensorVisualization = () => {
 
   // Export as JPEG
   const exportAsJPEG = () => {
-    const canvas = canvasRef.current;
-    canvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `sensor_visualization_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jpg`;
-      a.click();
-      URL.revokeObjectURL(url);
-    }, 'image/jpeg', 0.95);
+    if (useGoogleMap) {
+      // Export Google Map view as JPEG using html2canvas
+      const mapDiv = document.querySelector('.gm-style');
+      if (!mapDiv) return;
+      import('html2canvas').then(html2canvas => {
+        html2canvas.default(mapDiv, {useCORS: true, backgroundColor: null}).then(canvas => {
+          canvas.toBlob((blob) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `sensor_visualization_map_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jpg`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }, 'image/jpeg', 0.95);
+        });
+      });
+    } else {
+      const canvas = canvasRef.current;
+      canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `sensor_visualization_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jpg`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }, 'image/jpeg', 0.95);
+    }
   };
 
   // Export as PDF
   const exportAsPDF = () => {
-    const canvas = canvasRef.current;
-    const dataUrl = canvas.toDataURL('image/png');
     const sensorsToDisplay = isFilterActive ? filteredSensors : sensors;
-    
-    const windowContent = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Sensor Visualization Report</title>
-          <style>
-            body { margin: 0; padding: 20px; font-family: Arial, sans-serif; }
-            img { max-width: 100%; height: auto; }
-            h1 { color: #333; }
-            .info { margin-top: 20px; }
-            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            .deep { color: #00C853; font-weight: bold; }
-            .critical { color: #B71C1C; font-weight: bold; }
-            .medium { color: #FF6F00; }
-          </style>
-        </head>
-        <body>
-          <h1>Sensor Depth Visualization Report</h1>
-          <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
-          <p><strong>Total Sensor Records:</strong> ${sensorsToDisplay.length}</p>
-          <p><strong>Unique Sensors:</strong> ${[...new Set(sensorsToDisplay.map(s => s.id))].length}</p>
-          ${isFilterActive ? `<p><strong>Filter Applied:</strong> ${dateRange.startDate || 'Start'} to ${dateRange.endDate || 'End'}</p>` : ''}
-          <img src="${dataUrl}" />
-          <div class="info">
-            <h3>Sensor Records:</h3>
-            <table>
-              <tr>
-                <th>Sensor ID</th>
-                <th>Depth (m)</th>
-                <th>Status</th>
-                <th>Latitude</th>
-                <th>Longitude</th>
-                <th>Timestamp</th>
-              </tr>
-              ${sensorsToDisplay.map(s => {
-                const absDepth = Math.abs(s.depth);
-                const qualityClass = absDepth > 15 ? 'deep' : absDepth < 5 ? 'critical' : 'medium';
-                const quality = absDepth > 15 ? 'Good' : absDepth < 5 ? 'Critical' : 'Fair';
-                return `
-                  <tr>
-                    <td>${s.displayId}</td>
-                    <td class="${qualityClass}">${s.depth.toFixed(3)}</td>
-                    <td class="${qualityClass}">${quality}</td>
-                    <td>${s.latitude.toFixed(6)}</td>
-                    <td>${s.longitude.toFixed(6)}</td>
-                    <td>${s.datetime}</td>
-                  </tr>
-                `;
-              }).join('')}
-            </table>
-          </div>
-        </body>
-      </html>
-    `;
-    
-    const printWindow = window.open('', '', 'height=600,width=1400');
-    printWindow.document.write(windowContent);
-    printWindow.document.close();
-    setTimeout(() => printWindow.print(), 500);
+    if (useGoogleMap) {
+      const mapDiv = document.querySelector('.gm-style');
+      if (!mapDiv) return;
+      import('html2canvas').then(html2canvas => {
+        html2canvas.default(mapDiv, {useCORS: true, backgroundColor: null}).then(canvas => {
+          const dataUrl = canvas.toDataURL('image/png');
+          const windowContent = `
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <title>Sensor Visualization Report</title>
+                <style>
+                  body { margin: 0; padding: 20px; font-family: Arial, sans-serif; }
+                  img { max-width: 100%; height: auto; }
+                  h1 { color: #333; }
+                  .info { margin-top: 20px; }
+                  table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+                  th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                  th { background-color: #f2f2f2; }
+                  .deep { color: #00C853; font-weight: bold; }
+                  .critical { color: #B71C1C; font-weight: bold; }
+                  .medium { color: #FF6F00; }
+                </style>
+              </head>
+              <body>
+                <h1>Sensor Depth Visualization Report</h1>
+                <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
+                <p><strong>Total Sensor Records:</strong> ${sensorsToDisplay.length}</p>
+                <p><strong>Unique Sensors:</strong> ${[...new Set(sensorsToDisplay.map(s => s.id))].length}</p>
+                ${isFilterActive ? `<p><strong>Filter Applied:</strong> ${dateRange.startDate || 'Start'} to ${dateRange.endDate || 'End'}</p>` : ''}
+                <img src="${dataUrl}" />
+                <div class="info">
+                  <h3>Sensor Records:</h3>
+                  <table>
+                    <tr>
+                      <th>Sensor ID</th>
+                      <th>Depth (m)</th>
+                      <th>Status</th>
+                      <th>Latitude</th>
+                      <th>Longitude</th>
+                      <th>Timestamp</th>
+                    </tr>
+                    ${sensorsToDisplay.map(s => {
+                      const absDepth = Math.abs(s.depth);
+                      const qualityClass = absDepth > 15 ? 'deep' : absDepth < 5 ? 'critical' : 'medium';
+                      const quality = absDepth > 15 ? 'Good' : absDepth < 5 ? 'Critical' : 'Fair';
+                      return `
+                        <tr>
+                          <td>${s.displayId}</td>
+                          <td class="${qualityClass}">${s.depth.toFixed(3)}</td>
+                          <td class="${qualityClass}">${quality}</td>
+                          <td>${s.latitude.toFixed(6)}</td>
+                          <td>${s.longitude.toFixed(6)}</td>
+                          <td>${s.datetime}</td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </table>
+                </div>
+              </body>
+            </html>
+          `;
+          const printWindow = window.open('', '', 'height=600,width=1400');
+          printWindow.document.write(windowContent);
+          printWindow.document.close();
+          setTimeout(() => printWindow.print(), 500);
+        });
+      });
+    } else {
+      const canvas = canvasRef.current;
+      const dataUrl = canvas.toDataURL('image/png');
+      const windowContent = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Sensor Visualization Report</title>
+            <style>
+              body { margin: 0; padding: 20px; font-family: Arial, sans-serif; }
+              img { max-width: 100%; height: auto; }
+              h1 { color: #333; }
+              .info { margin-top: 20px; }
+              table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+              th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+              th { background-color: #f2f2f2; }
+              .deep { color: #00C853; font-weight: bold; }
+              .critical { color: #B71C1C; font-weight: bold; }
+              .medium { color: #FF6F00; }
+            </style>
+          </head>
+          <body>
+            <h1>Sensor Depth Visualization Report</h1>
+            <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
+            <p><strong>Total Sensor Records:</strong> ${sensorsToDisplay.length}</p>
+            <p><strong>Unique Sensors:</strong> ${[...new Set(sensorsToDisplay.map(s => s.id))].length}</p>
+            ${isFilterActive ? `<p><strong>Filter Applied:</strong> ${dateRange.startDate || 'Start'} to ${dateRange.endDate || 'End'}</p>` : ''}
+            <img src="${dataUrl}" />
+            <div class="info">
+              <h3>Sensor Records:</h3>
+              <table>
+                <tr>
+                  <th>Sensor ID</th>
+                  <th>Depth (m)</th>
+                  <th>Status</th>
+                  <th>Latitude</th>
+                  <th>Longitude</th>
+                  <th>Timestamp</th>
+                </tr>
+                ${sensorsToDisplay.map(s => {
+                  const absDepth = Math.abs(s.depth);
+                  const qualityClass = absDepth > 15 ? 'deep' : absDepth < 5 ? 'critical' : 'medium';
+                  const quality = absDepth > 15 ? 'Good' : absDepth < 5 ? 'Critical' : 'Fair';
+                  return `
+                    <tr>
+                      <td>${s.displayId}</td>
+                      <td class="${qualityClass}">${s.depth.toFixed(3)}</td>
+                      <td class="${qualityClass}">${quality}</td>
+                      <td>${s.latitude.toFixed(6)}</td>
+                      <td>${s.longitude.toFixed(6)}</td>
+                      <td>${s.datetime}</td>
+                    </tr>
+                  `;
+                }).join('')}
+              </table>
+            </div>
+          </body>
+        </html>
+      `;
+      const printWindow = window.open('', '', 'height=600,width=1400');
+      printWindow.document.write(windowContent);
+      printWindow.document.close();
+      setTimeout(() => printWindow.print(), 500);
+    }
   };
 
   // Load sample data
