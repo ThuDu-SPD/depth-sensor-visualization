@@ -6,7 +6,7 @@ import { GoogleMap, useJsApiLoader, Marker, InfoWindow } from '@react-google-map
 import './index.css'; // Make sure CSS is imported
 
 // Google Maps API key from .env
-const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+const GOOGLE_MAPS_API_KEY = import.meta.env.local VITE_GOOGLE_MAPS_API_KEY;
 
 // Load Google Maps API
 const mapContainerStyle = {
