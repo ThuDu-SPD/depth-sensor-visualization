@@ -1355,7 +1355,7 @@ const SensorVisualization = () => {
         <div style={styles.card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#6b7280' }}>
             <span>
-              {useGoogleMap ? 'Google Maps View' : `Canvas View (Zoom: ${(zoom * 100).toFixed(0)}%)`}
+              {useGoogleMap ? 'Google Maps View' : `Canvas View (Zoom: ${(zoom * 100).toFixed(20)}%)`}
             </span>
             <span>
               {isFilterActive ? 'Filtered: ' : ''}
