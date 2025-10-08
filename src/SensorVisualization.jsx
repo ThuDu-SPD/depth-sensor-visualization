@@ -9,12 +9,12 @@ import './index.css'; // Make sure CSS is imported
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
 // Load Google Maps API
-const mapContainerStyle = {
+const getMapContainerStyle = (isMobile) => ({
   width: '100%',
-  height: '600px',
+  height: isMobile ? '400px' : '600px',
   borderRadius: '8px',
   border: '1px solid #d1d5db',
-};
+});
 
 const SensorVisualization = () => {
   const canvasRef = useRef(null);
@@ -37,6 +37,7 @@ const SensorVisualization = () => {
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
   const [mapInstance, setMapInstance] = useState(null);
   const [useGoogleMap, setUseGoogleMap] = useState(true);
+  const [importStatus, setImportStatus] = useState('');
   
   // Google Maps API loader
   const { isLoaded } = useJsApiLoader({
@@ -352,7 +353,7 @@ const SensorVisualization = () => {
         ctx.fillStyle = '#333';
         ctx.font = `bold ${12}px Arial`; // Fixed size regardless of zoom
         ctx.textAlign = 'center';
-        ctx.fillText(`${sensor.depth.toFixed(3)}m`, pos.x, pos.y + 25);
+        ctx.fillText(`${formatDepth(sensor.depth)}m`, pos.x, pos.y + 25);
         
         // Draw sensor ID
         ctx.font = `10px Arial`; // Fixed size regardless of zoom
@@ -383,6 +384,11 @@ const SensorVisualization = () => {
 
   // INVERTED color scheme
   const getDepthColor = (depth) => {
+    // Handle NaN, null, undefined, or invalid values
+    if (isNaN(depth) || depth === null || depth === undefined) {
+      return '#999999'; // Gray for invalid/unknown depth
+    }
+    
     const absDepth = Math.abs(depth);
     
     if (absDepth > 25) return '#00C853'; // Very deep - Bright Green
@@ -442,6 +448,24 @@ const SensorVisualization = () => {
     ctx.fillText('CRITICAL ↓', legendX + 85, legendY + legendItems.length * 16 + 15);
   };
 
+  // Helper function to safely parse numeric values
+  const parseNumericValue = (value) => {
+    if (value === null || value === undefined || value === '') return 0;
+    // Handle string values that might have spaces or other whitespace
+    const cleanValue = String(value).trim();
+    if (cleanValue === '') return 0;
+    const parsed = parseFloat(cleanValue);
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
+  // Helper function to safely format depth values
+  const formatDepth = (depth, decimals = 3) => {
+    if (isNaN(depth) || depth === null || depth === undefined) {
+      return 'N/A';
+    }
+    return depth.toFixed(decimals);
+  };
+
   // Handle file import
   const handleFileImport = (e) => {
     const file = e.target.files[0];
@@ -458,53 +482,122 @@ const SensorVisualization = () => {
           header: true,
           dynamicTyping: true,
           skipEmptyLines: true,
+          transformHeader: (header) => header.trim().toLowerCase(),
           complete: (results) => {
-            importedData = results.data.map(row => ({
-              id: row.sensor_id || row.id,
-              datetime: row.datetime || row.date_time,
-              latitude: parseFloat(row.latitude),
-              longitude: parseFloat(row.longitude || row.longtitude),
-              depth: parseFloat(row.depth),
-              status: row.status || 'active'
-            }));
-            
-            const processedData = processSensorData(importedData);
-            setAllRecords(processedData);
-            setSensors(processedData);
-            setFilteredSensors(processedData);
-            setBounds(calculateBounds(processedData));
-            setLastUpdateTime(new Date());
+            try {
+              if (results.errors && results.errors.length > 0) {
+                console.warn('CSV parsing warnings:', results.errors);
+                setImportStatus('CSV imported with warnings - some data may be incomplete');
+              }
+              
+              importedData = results.data.map(row => {
+                // Create a normalized row object with trimmed keys
+                const normalizedRow = {};
+                Object.keys(row).forEach(key => {
+                  const trimmedKey = key.trim().toLowerCase();
+                  normalizedRow[trimmedKey] = row[key];
+                });
+                
+                return {
+                  id: normalizedRow['sensor_id'] || normalizedRow['id'] || normalizedRow['sensor id'],
+                  datetime: normalizedRow['datetime'] || normalizedRow['date_time'] || normalizedRow['date time'] || normalizedRow['timestamp'],
+                  latitude: parseNumericValue(normalizedRow['latitude'] || normalizedRow['lat']),
+                  longitude: parseNumericValue(normalizedRow['longitude'] || normalizedRow['longtitude'] || normalizedRow['lng'] || normalizedRow['lon']),
+                  depth: parseNumericValue(normalizedRow['depth'] || normalizedRow['depth_m'] || normalizedRow['depth (m)']),
+                  status: normalizedRow['status'] || 'active'
+                };
+              });
+              
+              // Filter out completely invalid records
+              importedData = importedData.filter(record => 
+                record.id && record.latitude !== 0 && record.longitude !== 0
+              );
+              
+              if (importedData.length === 0) {
+                setImportStatus('No valid sensor data found. Please check column names and data format.');
+                return;
+              }
+              
+              const processedData = processSensorData(importedData);
+              setAllRecords(processedData);
+              setSensors(processedData);
+              setFilteredSensors(processedData);
+              setBounds(calculateBounds(processedData));
+              setLastUpdateTime(new Date());
+              setImportStatus(`Successfully imported ${processedData.length} sensor records`);
+              
+              // Clear status after 3 seconds
+              setTimeout(() => setImportStatus(''), 3000);
+            } catch (error) {
+              console.error('Error processing CSV data:', error);
+              setImportStatus('Error processing CSV file. Please check the format.');
+              setTimeout(() => setImportStatus(''), 5000);
+            }
           }
         });
       } else if (fileExt === 'xlsx') {
-        const data = new Uint8Array(event.target.result);
-        const workbook = XLSX.read(data, { type: 'array', cellDates: false });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet);
-        
-        importedData = jsonData.map(row => {
-          // Get datetime value - could be serial date or string
-          const rawDatetime = row.datetime || row.date_time;
-          // Process datetime based on its type
-          const processedDatetime = excelDateToJS(rawDatetime);
+        try {
+          const data = new Uint8Array(event.target.result);
+          const workbook = XLSX.read(data, { type: 'array', cellDates: false });
+          const sheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[sheetName];
+          const jsonData = XLSX.utils.sheet_to_json(worksheet);
           
-          return {
-            id: row.sensor_id || row.id,
-            datetime: processedDatetime,
-            latitude: parseFloat(row.latitude),
-            longitude: parseFloat(row.longitude || row.longtitude),
-            depth: parseFloat(row.depth),
-            status: row.status || 'active'
-          };
-        });
-        
-        const processedData = processSensorData(importedData);
-        setAllRecords(processedData);
-        setSensors(processedData);
-        setFilteredSensors(processedData);
-        setBounds(calculateBounds(processedData));
-        setLastUpdateTime(new Date());
+          if (jsonData.length === 0) {
+            setImportStatus('Excel file is empty or has no data in the first sheet.');
+            setTimeout(() => setImportStatus(''), 5000);
+            return;
+          }
+          
+          importedData = jsonData.map(row => {
+            // Create a normalized row object with trimmed keys
+            const normalizedRow = {};
+            Object.keys(row).forEach(key => {
+              const trimmedKey = key.trim().toLowerCase();
+              normalizedRow[trimmedKey] = row[key];
+            });
+            
+            // Get datetime value - could be serial date or string
+            const rawDatetime = normalizedRow['datetime'] || normalizedRow['date_time'] || normalizedRow['date time'] || normalizedRow['timestamp'];
+            // Process datetime based on its type
+            const processedDatetime = excelDateToJS(rawDatetime);
+            
+            return {
+              id: normalizedRow['sensor_id'] || normalizedRow['id'] || normalizedRow['sensor id'],
+              datetime: processedDatetime,
+              latitude: parseNumericValue(normalizedRow['latitude'] || normalizedRow['lat']),
+              longitude: parseNumericValue(normalizedRow['longitude'] || normalizedRow['longtitude'] || normalizedRow['lng'] || normalizedRow['lon']),
+              depth: parseNumericValue(normalizedRow['depth'] || normalizedRow['depth_m'] || normalizedRow['depth (m)']),
+              status: normalizedRow['status'] || 'active'
+            };
+          });
+          
+          // Filter out completely invalid records
+          importedData = importedData.filter(record => 
+            record.id && record.latitude !== 0 && record.longitude !== 0
+          );
+          
+          if (importedData.length === 0) {
+            setImportStatus('No valid sensor data found in Excel file. Please check column names and data format.');
+            setTimeout(() => setImportStatus(''), 5000);
+            return;
+          }
+          
+          const processedData = processSensorData(importedData);
+          setAllRecords(processedData);
+          setSensors(processedData);
+          setFilteredSensors(processedData);
+          setBounds(calculateBounds(processedData));
+          setLastUpdateTime(new Date());
+          setImportStatus(`Successfully imported ${processedData.length} sensor records from Excel`);
+          
+          // Clear status after 3 seconds
+          setTimeout(() => setImportStatus(''), 3000);
+        } catch (error) {
+          console.error('Error processing Excel file:', error);
+          setImportStatus('Error reading Excel file. Please ensure it\'s a valid .xlsx file.');
+          setTimeout(() => setImportStatus(''), 5000);
+        }
       }
     };
     
@@ -867,8 +960,17 @@ const SensorVisualization = () => {
     }, {});
     
     Object.values(grouped).forEach(summary => {
-      const sum = summary.records.reduce((s, r) => s + r.depth, 0);
-      summary.avgDepth = (sum / summary.records.length).toFixed(3);
+      const validDepths = summary.records.filter(r => !isNaN(r.depth) && r.depth !== null && r.depth !== undefined);
+      if (validDepths.length > 0) {
+        const sum = validDepths.reduce((s, r) => s + r.depth, 0);
+        summary.avgDepth = (sum / validDepths.length).toFixed(3);
+        summary.minDepth = Math.min(...validDepths.map(r => r.depth));
+        summary.maxDepth = Math.max(...validDepths.map(r => r.depth));
+      } else {
+        summary.avgDepth = 'N/A';
+        summary.minDepth = 'N/A';
+        summary.maxDepth = 'N/A';
+      }
     });
     
     return Object.values(grouped);
@@ -876,31 +978,50 @@ const SensorVisualization = () => {
 
   const sensorSummaries = getSensorSummary();
 
-  // Inline styles
+  // Track window width for responsive design
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  
+  // Responsive breakpoints
+  const isMobile = windowWidth <= 768;
+  const isTablet = windowWidth > 768 && windowWidth <= 1024;
+  
+  // Add window resize listener
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowWidth(window.innerWidth);
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+  
+  // Inline styles with responsive adjustments
   const styles = {
     container: {
       minHeight: '100vh',
       backgroundColor: '#f3f4f6',
-      padding: '16px'
+      padding: isMobile ? '8px' : '16px'
     },
     card: {
       backgroundColor: 'white',
       borderRadius: '8px',
       boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
-      padding: '16px',
-      marginBottom: '16px'
+      padding: isMobile ? '12px' : '16px',
+      marginBottom: '16px',
+      overflowX: isMobile ? 'auto' : 'visible'
     },
     button: {
-      padding: '8px 16px',
+      padding: isMobile ? '6px 12px' : '8px 16px',
       borderRadius: '6px',
       border: 'none',
       cursor: 'pointer',
       display: 'inline-flex',
       alignItems: 'center',
-      gap: '8px',
-      fontSize: '14px',
+      gap: isMobile ? '4px' : '8px',
+      fontSize: isMobile ? '12px' : '14px',
       fontWeight: '500',
-      transition: 'all 0.2s'
+      transition: 'all 0.2s',
+      whiteSpace: 'nowrap'
     },
     primaryButton: {
       backgroundColor: '#3B82F6',
@@ -913,20 +1034,31 @@ const SensorVisualization = () => {
     canvas: {
       border: '1px solid #d1d5db',
       cursor: isDragging ? 'grabbing' : 'grab',
-      backgroundColor: 'white'
+      backgroundColor: 'white',
+      maxWidth: '100%',
+      height: 'auto'
     },
     input: {
       padding: '6px 10px',
       borderRadius: '4px',
       border: '1px solid #d1d5db',
-      fontSize: '14px'
+      fontSize: isMobile ? '12px' : '14px',
+      maxWidth: isMobile ? '100px' : 'auto'
     }
   };
+
+
 
   return (
     <div style={styles.container}>
       <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
-        <h1 style={{ fontSize: '28px', fontWeight: 'bold', marginBottom: '24px', color: '#1f2937' }}>
+        <h1 style={{ 
+          fontSize: isMobile ? '20px' : '28px', 
+          fontWeight: 'bold', 
+          marginBottom: isMobile ? '16px' : '24px', 
+          color: '#1f2937',
+          textAlign: isMobile ? 'center' : 'left'
+        }}>
           Sensor Depth Visualization System
         </h1>
         
@@ -937,56 +1069,76 @@ const SensorVisualization = () => {
             <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Date & Time Filter</h3>
           </div>
           
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
-            <div>
-              <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
-                Start Date
-              </label>
-              <input
-                type="date"
-                value={dateRange.startDate}
-                onChange={(e) => setDateRange({...dateRange, startDate: e.target.value})}
-                style={styles.input}
-              />
+          <div style={{ 
+            display: 'flex', 
+            flexWrap: 'wrap', 
+            gap: isMobile ? '8px' : '12px',
+            alignItems: 'center',
+            flexDirection: isMobile ? 'column' : 'row'
+          }}>
+            <div style={{ 
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr 1fr' : 'auto auto auto auto',
+              gap: isMobile ? '8px' : '12px',
+              width: '100%'
+            }}>
+              <div>
+                <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
+                  Start Date
+                </label>
+                <input
+                  type="date"
+                  value={dateRange.startDate}
+                  onChange={(e) => setDateRange({...dateRange, startDate: e.target.value})}
+                  style={styles.input}
+                />
+              </div>
+              
+              <div>
+                <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
+                  Start Time
+                </label>
+                <input
+                  type="time"
+                  value={dateRange.startTime}
+                  onChange={(e) => setDateRange({...dateRange, startTime: e.target.value})}
+                  style={styles.input}
+                />
+              </div>
+              
+              <div>
+                <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
+                  End Date
+                </label>
+                <input
+                  type="date"
+                  value={dateRange.endDate}
+                  onChange={(e) => setDateRange({...dateRange, endDate: e.target.value})}
+                  style={styles.input}
+                />
+              </div>
+              
+              <div>
+                <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
+                  End Time
+                </label>
+                <input
+                  type="time"
+                  value={dateRange.endTime}
+                  onChange={(e) => setDateRange({...dateRange, endTime: e.target.value})}
+                  style={styles.input}
+                />
+              </div>
             </div>
             
-            <div>
-              <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
-                Start Time
-              </label>
-              <input
-                type="time"
-                value={dateRange.startTime}
-                onChange={(e) => setDateRange({...dateRange, startTime: e.target.value})}
-                style={styles.input}
-              />
-            </div>
-            
-            <div>
-              <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
-                End Date
-              </label>
-              <input
-                type="date"
-                value={dateRange.endDate}
-                onChange={(e) => setDateRange({...dateRange, endDate: e.target.value})}
-                style={styles.input}
-              />
-            </div>
-            
-            <div>
-              <label style={{ fontSize: '12px', color: '#6b7280', display: 'block', marginBottom: '4px' }}>
-                End Time
-              </label>
-              <input
-                type="time"
-                value={dateRange.endTime}
-                onChange={(e) => setDateRange({...dateRange, endTime: e.target.value})}
-                style={styles.input}
-              />
-            </div>
-            
-            <div style={{ display: 'flex', gap: '8px', marginLeft: 'auto' }}>
+            <div style={{ 
+              display: 'flex', 
+              gap: '8px', 
+              marginLeft: isMobile ? '0' : 'auto',
+              marginTop: isMobile ? '8px' : '0',
+              width: isMobile ? '100%' : 'auto',
+              justifyContent: isMobile ? 'space-between' : 'flex-end'
+            }}>
               <button
                 onClick={applyDateTimeFilter}
                 style={{ ...styles.button, ...styles.primaryButton }}
@@ -1022,7 +1174,13 @@ const SensorVisualization = () => {
         
         {/* Control Panel */}
         <div style={styles.card}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+          <div style={{ 
+            display: 'flex', 
+            flexWrap: 'wrap', 
+            gap: isMobile ? '8px' : '12px', 
+            alignItems: 'center',
+            justifyContent: isMobile ? 'space-between' : 'flex-start'
+          }}>
             
             {/* File Import */}
             <label style={{ ...styles.button, ...styles.primaryButton }}>
@@ -1057,6 +1215,25 @@ const SensorVisualization = () => {
               <Database size={20} />
               {isConnected ? 'Connected' : 'Connect Firebase'}
             </button>
+            
+            {/* Import Status Display */}
+            {importStatus && (
+              <div style={{
+                padding: '8px 12px',
+                borderRadius: '4px',
+                fontSize: '12px',
+                fontWeight: '500',
+                backgroundColor: importStatus.includes('Error') || importStatus.includes('No valid') ? 
+                  '#FEF2F2' : '#F0FDF4',
+                color: importStatus.includes('Error') || importStatus.includes('No valid') ? 
+                  '#DC2626' : '#16A34A',
+                border: `1px solid ${importStatus.includes('Error') || importStatus.includes('No valid') ? 
+                  '#FECACA' : '#BBF7D0'}`,
+                maxWidth: '300px'
+              }}>
+                {importStatus}
+              </div>
+            )}
             
             {/* Export Options */}
             <button
@@ -1152,18 +1329,22 @@ const SensorVisualization = () => {
         
         {/* Main Visualization */}
         <div style={styles.card}>
-          <div style={{ display: 'flex', gap: '16px' }}>
+          <div style={{ 
+            display: 'flex', 
+            flexDirection: isMobile ? 'column' : 'row',
+            gap: '16px' 
+          }}>
             <div style={{ flex: 1 }}>
               {useGoogleMap && isLoaded ? (
                 <GoogleMap
-                  mapContainerStyle={mapContainerStyle}
+                  mapContainerStyle={getMapContainerStyle(isMobile)}
                   center={mapCenter}
                   zoom={initialMapZoom}
                   onLoad={onMapLoad}
                   options={{
                     zoomControl: true,
                     streetViewControl: false,
-                    mapTypeControl: true,
+                    mapTypeControl: !isMobile, // Hide map type control on mobile
                     fullscreenControl: true,
                     gestureHandling: 'greedy', // Makes the map easier to zoom with mouse wheel
                     mapTypeControlOptions: {
@@ -1191,13 +1372,13 @@ const SensorVisualization = () => {
                         key={`${sensor.id}-${sensor.datetime}-${index}`}
                         position={{ lat: sensor.latitude, lng: sensor.longitude }}
                         icon={circleMarker}
-                        title={`${sensor.displayId}: ${sensor.depth.toFixed(3)}m`}
+                        title={`${sensor.displayId}: ${formatDepth(sensor.depth)}m`}
                         onClick={() => {
                           setSelectedMarker(sensor);
                           setSelectedSensor(sensor);
                         }}
                         label={{
-                          text: sensor.depth.toFixed(1),
+                          text: formatDepth(sensor.depth, 1),
                           color: '#FFFFFF',
                           fontSize: '10px',
                           fontWeight: 'bold'
@@ -1217,7 +1398,7 @@ const SensorVisualization = () => {
                           {selectedMarker.displayId}
                         </h3>
                         <p style={{ margin: '3px 0', fontSize: '12px' }}>
-                          <strong>Depth:</strong> {selectedMarker.depth.toFixed(3)}m
+                          <strong>Depth:</strong> {formatDepth(selectedMarker.depth)}m
                         </p>
                         <p style={{ margin: '3px 0', fontSize: '12px' }}>
                           <strong>Date:</strong> {selectedMarker.datetime}
@@ -1326,9 +1507,13 @@ const SensorVisualization = () => {
               ) : (
                 <canvas
                   ref={canvasRef}
-                  width={1000}
-                  height={600}
-                  style={styles.canvas}
+                  width={isMobile ? 320 : 1000}
+                  height={isMobile ? 400 : 600}
+                  style={{
+                    ...styles.canvas,
+                    width: '100%',
+                    maxHeight: isMobile ? '400px' : '600px',
+                  }}
                   onMouseDown={handleCanvasMouseDown}
                   onMouseMove={handleCanvasMouseMove}
                   onMouseUp={handleCanvasMouseUp}
@@ -1345,7 +1530,10 @@ const SensorVisualization = () => {
             </div>
             
             {/* Sensor Summary List */}
-            <div style={{ width: '320px' }}>
+            <div style={{ 
+              width: isMobile ? '100%' : '320px',
+              marginTop: isMobile ? '16px' : 0 
+            }}>
               <div style={{ marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '8px' }}>
                   Sensor Summary
@@ -1363,16 +1551,17 @@ const SensorVisualization = () => {
                 padding: '8px'
               }}>
                 {sensorSummaries.map((summary) => {
-                  const avgDepth = parseFloat(summary.avgDepth);
-                  const depthQuality = Math.abs(avgDepth) > 15 ? 'Good' : Math.abs(avgDepth) < 5 ? 'Critical' : 'Fair';
+                  const avgDepth = summary.avgDepth === 'N/A' ? 0 : parseFloat(summary.avgDepth);
+                  const depthQuality = summary.avgDepth === 'N/A' ? 'Unknown' : 
+                    Math.abs(avgDepth) > 15 ? 'Good' : Math.abs(avgDepth) < 5 ? 'Critical' : 'Fair';
                   
                   // IMPROVED COLORS FOR BETTER READABILITY
-                  const qualityColor = 
+                  const qualityColor = summary.avgDepth === 'N/A' ? '#999999' :
                     Math.abs(avgDepth) > 15 ? '#00C853' : 
                     Math.abs(avgDepth) < 5 ? '#B71C1C' : 
                     '#FF6F00'; // Changed from yellow to dark orange for better readability
                   
-                  const bgColor = 
+                  const bgColor = summary.avgDepth === 'N/A' ? 'rgba(153, 153, 153, 0.1)' :
                     Math.abs(avgDepth) > 15 ? 'rgba(0, 200, 83, 0.1)' :
                     Math.abs(avgDepth) < 5 ? 'rgba(183, 28, 28, 0.1)' :
                     'rgba(255, 111, 0, 0.1)'; // Light orange background
@@ -1418,7 +1607,9 @@ const SensorVisualization = () => {
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                           <span>Range:</span>
-                          <span>{summary.minDepth.toFixed(3)}m to {summary.maxDepth.toFixed(3)}m</span>
+                          <span>
+                            {summary.minDepth === 'N/A' ? 'N/A' : `${summary.minDepth.toFixed(3)}m`} to {summary.maxDepth === 'N/A' ? 'N/A' : `${summary.maxDepth.toFixed(3)}m`}
+                          </span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                           <span>Records:</span>
@@ -1439,9 +1630,16 @@ const SensorVisualization = () => {
         
         {/* Status Bar */}
         <div style={styles.card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#6b7280' }}>
+          <div style={{ 
+            display: 'flex', 
+            flexDirection: isMobile ? 'column' : 'row',
+            gap: isMobile ? '8px' : '0',
+            justifyContent: 'space-between', 
+            fontSize: isMobile ? '12px' : '14px', 
+            color: '#6b7280' 
+          }}>
             <span>
-              {useGoogleMap ? 'Google Maps View' : `Canvas View (Zoom: ${(zoom * 100).toFixed(20)}%)`}
+              {useGoogleMap ? 'Google Maps View' : `Canvas View (Zoom: ${(zoom * 100).toFixed(isMobile ? 0 : 2)}%)`}
             </span>
             <span>
               {isFilterActive ? 'Filtered: ' : ''}
@@ -1451,7 +1649,7 @@ const SensorVisualization = () => {
             <span>
               Depth range: {
                 (isFilterActive ? filteredSensors : sensors).length > 0 ?
-                `${Math.min(...(isFilterActive ? filteredSensors : sensors).map(s => s.depth)).toFixed(3)}m to ${Math.max(...(isFilterActive ? filteredSensors : sensors).map(s => s.depth)).toFixed(3)}m`
+                `${Math.min(...(isFilterActive ? filteredSensors : sensors).map(s => s.depth)).toFixed(isMobile ? 1 : 3)}m to ${Math.max(...(isFilterActive ? filteredSensors : sensors).map(s => s.depth)).toFixed(isMobile ? 1 : 3)}m`
                 : 'No data'
               }
             </span>
