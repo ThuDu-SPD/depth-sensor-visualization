@@ -352,7 +352,7 @@ const SensorVisualization = () => {
         ctx.fillStyle = '#333';
         ctx.font = `bold ${12}px Arial`; // Fixed size regardless of zoom
         ctx.textAlign = 'center';
-        ctx.fillText(`${sensor.depth.toFixed(3)}m`, pos.x, pos.y + 25);
+        ctx.fillText(`${formatDepth(sensor.depth)}m`, pos.x, pos.y + 25);
         
         // Draw sensor ID
         ctx.font = `10px Arial`; // Fixed size regardless of zoom
@@ -383,6 +383,11 @@ const SensorVisualization = () => {
 
   // INVERTED color scheme
   const getDepthColor = (depth) => {
+    // Handle NaN, null, undefined, or invalid values
+    if (isNaN(depth) || depth === null || depth === undefined) {
+      return '#999999'; // Gray for invalid/unknown depth
+    }
+    
     const absDepth = Math.abs(depth);
     
     if (absDepth > 25) return '#00C853'; // Very deep - Bright Green
@@ -442,6 +447,24 @@ const SensorVisualization = () => {
     ctx.fillText('CRITICAL ↓', legendX + 85, legendY + legendItems.length * 16 + 15);
   };
 
+  // Helper function to safely parse numeric values
+  const parseNumericValue = (value) => {
+    if (value === null || value === undefined || value === '') return 0;
+    // Handle string values that might have spaces or other whitespace
+    const cleanValue = String(value).trim();
+    if (cleanValue === '') return 0;
+    const parsed = parseFloat(cleanValue);
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
+  // Helper function to safely format depth values
+  const formatDepth = (depth, decimals = 3) => {
+    if (isNaN(depth) || depth === null || depth === undefined) {
+      return 'N/A';
+    }
+    return depth.toFixed(decimals);
+  };
+
   // Handle file import
   const handleFileImport = (e) => {
     const file = e.target.files[0];
@@ -458,15 +481,25 @@ const SensorVisualization = () => {
           header: true,
           dynamicTyping: true,
           skipEmptyLines: true,
+          transformHeader: (header) => header.trim().toLowerCase(),
           complete: (results) => {
-            importedData = results.data.map(row => ({
-              id: row.sensor_id || row.id,
-              datetime: row.datetime || row.date_time,
-              latitude: parseFloat(row.latitude),
-              longitude: parseFloat(row.longitude || row.longtitude),
-              depth: parseFloat(row.depth),
-              status: row.status || 'active'
-            }));
+            importedData = results.data.map(row => {
+              // Create a normalized row object with trimmed keys
+              const normalizedRow = {};
+              Object.keys(row).forEach(key => {
+                const trimmedKey = key.trim().toLowerCase();
+                normalizedRow[trimmedKey] = row[key];
+              });
+              
+              return {
+                id: normalizedRow['sensor_id'] || normalizedRow['id'] || normalizedRow['sensor id'],
+                datetime: normalizedRow['datetime'] || normalizedRow['date_time'] || normalizedRow['date time'] || normalizedRow['timestamp'],
+                latitude: parseNumericValue(normalizedRow['latitude'] || normalizedRow['lat']),
+                longitude: parseNumericValue(normalizedRow['longitude'] || normalizedRow['longtitude'] || normalizedRow['lng'] || normalizedRow['lon']),
+                depth: parseNumericValue(normalizedRow['depth'] || normalizedRow['depth_m'] || normalizedRow['depth (m)']),
+                status: normalizedRow['status'] || 'active'
+              };
+            });
             
             const processedData = processSensorData(importedData);
             setAllRecords(processedData);
@@ -484,18 +517,25 @@ const SensorVisualization = () => {
         const jsonData = XLSX.utils.sheet_to_json(worksheet);
         
         importedData = jsonData.map(row => {
+          // Create a normalized row object with trimmed keys
+          const normalizedRow = {};
+          Object.keys(row).forEach(key => {
+            const trimmedKey = key.trim().toLowerCase();
+            normalizedRow[trimmedKey] = row[key];
+          });
+          
           // Get datetime value - could be serial date or string
-          const rawDatetime = row.datetime || row.date_time;
+          const rawDatetime = normalizedRow['datetime'] || normalizedRow['date_time'] || normalizedRow['date time'] || normalizedRow['timestamp'];
           // Process datetime based on its type
           const processedDatetime = excelDateToJS(rawDatetime);
           
           return {
-            id: row.sensor_id || row.id,
+            id: normalizedRow['sensor_id'] || normalizedRow['id'] || normalizedRow['sensor id'],
             datetime: processedDatetime,
-            latitude: parseFloat(row.latitude),
-            longitude: parseFloat(row.longitude || row.longtitude),
-            depth: parseFloat(row.depth),
-            status: row.status || 'active'
+            latitude: parseNumericValue(normalizedRow['latitude'] || normalizedRow['lat']),
+            longitude: parseNumericValue(normalizedRow['longitude'] || normalizedRow['longtitude'] || normalizedRow['lng'] || normalizedRow['lon']),
+            depth: parseNumericValue(normalizedRow['depth'] || normalizedRow['depth_m'] || normalizedRow['depth (m)']),
+            status: normalizedRow['status'] || 'active'
           };
         });
         
@@ -867,8 +907,17 @@ const SensorVisualization = () => {
     }, {});
     
     Object.values(grouped).forEach(summary => {
-      const sum = summary.records.reduce((s, r) => s + r.depth, 0);
-      summary.avgDepth = (sum / summary.records.length).toFixed(3);
+      const validDepths = summary.records.filter(r => !isNaN(r.depth) && r.depth !== null && r.depth !== undefined);
+      if (validDepths.length > 0) {
+        const sum = validDepths.reduce((s, r) => s + r.depth, 0);
+        summary.avgDepth = (sum / validDepths.length).toFixed(3);
+        summary.minDepth = Math.min(...validDepths.map(r => r.depth));
+        summary.maxDepth = Math.max(...validDepths.map(r => r.depth));
+      } else {
+        summary.avgDepth = 'N/A';
+        summary.minDepth = 'N/A';
+        summary.maxDepth = 'N/A';
+      }
     });
     
     return Object.values(grouped);
@@ -1251,13 +1300,13 @@ const SensorVisualization = () => {
                         key={`${sensor.id}-${sensor.datetime}-${index}`}
                         position={{ lat: sensor.latitude, lng: sensor.longitude }}
                         icon={circleMarker}
-                        title={`${sensor.displayId}: ${sensor.depth.toFixed(3)}m`}
+                        title={`${sensor.displayId}: ${formatDepth(sensor.depth)}m`}
                         onClick={() => {
                           setSelectedMarker(sensor);
                           setSelectedSensor(sensor);
                         }}
                         label={{
-                          text: sensor.depth.toFixed(1),
+                          text: formatDepth(sensor.depth, 1),
                           color: '#FFFFFF',
                           fontSize: '10px',
                           fontWeight: 'bold'
@@ -1277,7 +1326,7 @@ const SensorVisualization = () => {
                           {selectedMarker.displayId}
                         </h3>
                         <p style={{ margin: '3px 0', fontSize: '12px' }}>
-                          <strong>Depth:</strong> {selectedMarker.depth.toFixed(3)}m
+                          <strong>Depth:</strong> {formatDepth(selectedMarker.depth)}m
                         </p>
                         <p style={{ margin: '3px 0', fontSize: '12px' }}>
                           <strong>Date:</strong> {selectedMarker.datetime}
@@ -1430,16 +1479,17 @@ const SensorVisualization = () => {
                 padding: '8px'
               }}>
                 {sensorSummaries.map((summary) => {
-                  const avgDepth = parseFloat(summary.avgDepth);
-                  const depthQuality = Math.abs(avgDepth) > 15 ? 'Good' : Math.abs(avgDepth) < 5 ? 'Critical' : 'Fair';
+                  const avgDepth = summary.avgDepth === 'N/A' ? 0 : parseFloat(summary.avgDepth);
+                  const depthQuality = summary.avgDepth === 'N/A' ? 'Unknown' : 
+                    Math.abs(avgDepth) > 15 ? 'Good' : Math.abs(avgDepth) < 5 ? 'Critical' : 'Fair';
                   
                   // IMPROVED COLORS FOR BETTER READABILITY
-                  const qualityColor = 
+                  const qualityColor = summary.avgDepth === 'N/A' ? '#999999' :
                     Math.abs(avgDepth) > 15 ? '#00C853' : 
                     Math.abs(avgDepth) < 5 ? '#B71C1C' : 
                     '#FF6F00'; // Changed from yellow to dark orange for better readability
                   
-                  const bgColor = 
+                  const bgColor = summary.avgDepth === 'N/A' ? 'rgba(153, 153, 153, 0.1)' :
                     Math.abs(avgDepth) > 15 ? 'rgba(0, 200, 83, 0.1)' :
                     Math.abs(avgDepth) < 5 ? 'rgba(183, 28, 28, 0.1)' :
                     'rgba(255, 111, 0, 0.1)'; // Light orange background
@@ -1485,7 +1535,9 @@ const SensorVisualization = () => {
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                           <span>Range:</span>
-                          <span>{summary.minDepth.toFixed(3)}m to {summary.maxDepth.toFixed(3)}m</span>
+                          <span>
+                            {summary.minDepth === 'N/A' ? 'N/A' : `${summary.minDepth.toFixed(3)}m`} to {summary.maxDepth === 'N/A' ? 'N/A' : `${summary.maxDepth.toFixed(3)}m`}
+                          </span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                           <span>Records:</span>
