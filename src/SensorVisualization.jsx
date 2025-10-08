@@ -37,6 +37,7 @@ const SensorVisualization = () => {
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
   const [mapInstance, setMapInstance] = useState(null);
   const [useGoogleMap, setUseGoogleMap] = useState(true);
+  const [importStatus, setImportStatus] = useState('');
   
   // Google Maps API loader
   const { isLoaded } = useJsApiLoader({
@@ -483,68 +484,120 @@ const SensorVisualization = () => {
           skipEmptyLines: true,
           transformHeader: (header) => header.trim().toLowerCase(),
           complete: (results) => {
-            importedData = results.data.map(row => {
-              // Create a normalized row object with trimmed keys
-              const normalizedRow = {};
-              Object.keys(row).forEach(key => {
-                const trimmedKey = key.trim().toLowerCase();
-                normalizedRow[trimmedKey] = row[key];
+            try {
+              if (results.errors && results.errors.length > 0) {
+                console.warn('CSV parsing warnings:', results.errors);
+                setImportStatus('CSV imported with warnings - some data may be incomplete');
+              }
+              
+              importedData = results.data.map(row => {
+                // Create a normalized row object with trimmed keys
+                const normalizedRow = {};
+                Object.keys(row).forEach(key => {
+                  const trimmedKey = key.trim().toLowerCase();
+                  normalizedRow[trimmedKey] = row[key];
+                });
+                
+                return {
+                  id: normalizedRow['sensor_id'] || normalizedRow['id'] || normalizedRow['sensor id'],
+                  datetime: normalizedRow['datetime'] || normalizedRow['date_time'] || normalizedRow['date time'] || normalizedRow['timestamp'],
+                  latitude: parseNumericValue(normalizedRow['latitude'] || normalizedRow['lat']),
+                  longitude: parseNumericValue(normalizedRow['longitude'] || normalizedRow['longtitude'] || normalizedRow['lng'] || normalizedRow['lon']),
+                  depth: parseNumericValue(normalizedRow['depth'] || normalizedRow['depth_m'] || normalizedRow['depth (m)']),
+                  status: normalizedRow['status'] || 'active'
+                };
               });
               
-              return {
-                id: normalizedRow['sensor_id'] || normalizedRow['id'] || normalizedRow['sensor id'],
-                datetime: normalizedRow['datetime'] || normalizedRow['date_time'] || normalizedRow['date time'] || normalizedRow['timestamp'],
-                latitude: parseNumericValue(normalizedRow['latitude'] || normalizedRow['lat']),
-                longitude: parseNumericValue(normalizedRow['longitude'] || normalizedRow['longtitude'] || normalizedRow['lng'] || normalizedRow['lon']),
-                depth: parseNumericValue(normalizedRow['depth'] || normalizedRow['depth_m'] || normalizedRow['depth (m)']),
-                status: normalizedRow['status'] || 'active'
-              };
-            });
-            
-            const processedData = processSensorData(importedData);
-            setAllRecords(processedData);
-            setSensors(processedData);
-            setFilteredSensors(processedData);
-            setBounds(calculateBounds(processedData));
-            setLastUpdateTime(new Date());
+              // Filter out completely invalid records
+              importedData = importedData.filter(record => 
+                record.id && record.latitude !== 0 && record.longitude !== 0
+              );
+              
+              if (importedData.length === 0) {
+                setImportStatus('No valid sensor data found. Please check column names and data format.');
+                return;
+              }
+              
+              const processedData = processSensorData(importedData);
+              setAllRecords(processedData);
+              setSensors(processedData);
+              setFilteredSensors(processedData);
+              setBounds(calculateBounds(processedData));
+              setLastUpdateTime(new Date());
+              setImportStatus(`Successfully imported ${processedData.length} sensor records`);
+              
+              // Clear status after 3 seconds
+              setTimeout(() => setImportStatus(''), 3000);
+            } catch (error) {
+              console.error('Error processing CSV data:', error);
+              setImportStatus('Error processing CSV file. Please check the format.');
+              setTimeout(() => setImportStatus(''), 5000);
+            }
           }
         });
       } else if (fileExt === 'xlsx') {
-        const data = new Uint8Array(event.target.result);
-        const workbook = XLSX.read(data, { type: 'array', cellDates: false });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet);
-        
-        importedData = jsonData.map(row => {
-          // Create a normalized row object with trimmed keys
-          const normalizedRow = {};
-          Object.keys(row).forEach(key => {
-            const trimmedKey = key.trim().toLowerCase();
-            normalizedRow[trimmedKey] = row[key];
+        try {
+          const data = new Uint8Array(event.target.result);
+          const workbook = XLSX.read(data, { type: 'array', cellDates: false });
+          const sheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[sheetName];
+          const jsonData = XLSX.utils.sheet_to_json(worksheet);
+          
+          if (jsonData.length === 0) {
+            setImportStatus('Excel file is empty or has no data in the first sheet.');
+            setTimeout(() => setImportStatus(''), 5000);
+            return;
+          }
+          
+          importedData = jsonData.map(row => {
+            // Create a normalized row object with trimmed keys
+            const normalizedRow = {};
+            Object.keys(row).forEach(key => {
+              const trimmedKey = key.trim().toLowerCase();
+              normalizedRow[trimmedKey] = row[key];
+            });
+            
+            // Get datetime value - could be serial date or string
+            const rawDatetime = normalizedRow['datetime'] || normalizedRow['date_time'] || normalizedRow['date time'] || normalizedRow['timestamp'];
+            // Process datetime based on its type
+            const processedDatetime = excelDateToJS(rawDatetime);
+            
+            return {
+              id: normalizedRow['sensor_id'] || normalizedRow['id'] || normalizedRow['sensor id'],
+              datetime: processedDatetime,
+              latitude: parseNumericValue(normalizedRow['latitude'] || normalizedRow['lat']),
+              longitude: parseNumericValue(normalizedRow['longitude'] || normalizedRow['longtitude'] || normalizedRow['lng'] || normalizedRow['lon']),
+              depth: parseNumericValue(normalizedRow['depth'] || normalizedRow['depth_m'] || normalizedRow['depth (m)']),
+              status: normalizedRow['status'] || 'active'
+            };
           });
           
-          // Get datetime value - could be serial date or string
-          const rawDatetime = normalizedRow['datetime'] || normalizedRow['date_time'] || normalizedRow['date time'] || normalizedRow['timestamp'];
-          // Process datetime based on its type
-          const processedDatetime = excelDateToJS(rawDatetime);
+          // Filter out completely invalid records
+          importedData = importedData.filter(record => 
+            record.id && record.latitude !== 0 && record.longitude !== 0
+          );
           
-          return {
-            id: normalizedRow['sensor_id'] || normalizedRow['id'] || normalizedRow['sensor id'],
-            datetime: processedDatetime,
-            latitude: parseNumericValue(normalizedRow['latitude'] || normalizedRow['lat']),
-            longitude: parseNumericValue(normalizedRow['longitude'] || normalizedRow['longtitude'] || normalizedRow['lng'] || normalizedRow['lon']),
-            depth: parseNumericValue(normalizedRow['depth'] || normalizedRow['depth_m'] || normalizedRow['depth (m)']),
-            status: normalizedRow['status'] || 'active'
-          };
-        });
-        
-        const processedData = processSensorData(importedData);
-        setAllRecords(processedData);
-        setSensors(processedData);
-        setFilteredSensors(processedData);
-        setBounds(calculateBounds(processedData));
-        setLastUpdateTime(new Date());
+          if (importedData.length === 0) {
+            setImportStatus('No valid sensor data found in Excel file. Please check column names and data format.');
+            setTimeout(() => setImportStatus(''), 5000);
+            return;
+          }
+          
+          const processedData = processSensorData(importedData);
+          setAllRecords(processedData);
+          setSensors(processedData);
+          setFilteredSensors(processedData);
+          setBounds(calculateBounds(processedData));
+          setLastUpdateTime(new Date());
+          setImportStatus(`Successfully imported ${processedData.length} sensor records from Excel`);
+          
+          // Clear status after 3 seconds
+          setTimeout(() => setImportStatus(''), 3000);
+        } catch (error) {
+          console.error('Error processing Excel file:', error);
+          setImportStatus('Error reading Excel file. Please ensure it\'s a valid .xlsx file.');
+          setTimeout(() => setImportStatus(''), 5000);
+        }
       }
     };
     
@@ -1162,6 +1215,25 @@ const SensorVisualization = () => {
               <Database size={20} />
               {isConnected ? 'Connected' : 'Connect Firebase'}
             </button>
+            
+            {/* Import Status Display */}
+            {importStatus && (
+              <div style={{
+                padding: '8px 12px',
+                borderRadius: '4px',
+                fontSize: '12px',
+                fontWeight: '500',
+                backgroundColor: importStatus.includes('Error') || importStatus.includes('No valid') ? 
+                  '#FEF2F2' : '#F0FDF4',
+                color: importStatus.includes('Error') || importStatus.includes('No valid') ? 
+                  '#DC2626' : '#16A34A',
+                border: `1px solid ${importStatus.includes('Error') || importStatus.includes('No valid') ? 
+                  '#FECACA' : '#BBF7D0'}`,
+                maxWidth: '300px'
+              }}>
+                {importStatus}
+              </div>
+            )}
             
             {/* Export Options */}
             <button
